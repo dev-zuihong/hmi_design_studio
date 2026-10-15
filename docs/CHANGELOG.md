@@ -24,3 +24,22 @@
   - `git diff --check` 和 `git diff --cached --check` 通过；暂存范围仅为三份约定文档。
   - 首次结构检查因 PowerShell 向 Python 标准输入传递中文脚本时发生编码替换而失败；改用 ASCII 脚本及 Unicode 转义后复查通过，文档本身的 UTF-8 内容正常。
 - **未完成事项**：应用开发尚未开始；未进行应用构建、自动化功能测试或跨平台真实设备验证，这些属于后续实施阶段。
+
+## CHG-0002 — 前端改为 Vue 与 Fluent Design，首版限定 Windows x64
+
+- **时间**：2026-10-15 16:22:02 +08:00（北京时间）。
+- **类型**：技术选型与首版交付范围调整。
+- **方案版本**：v0.1 → v0.2。
+- **修改内容**：
+  - 前端由 React/TypeScript 改为 Vue 3 Composition API、TypeScript、Vite；拖拽和框选分别改用 `vue3-moveable`、`vue3-selecto`。
+  - 选用微软官方 Fluent UI Web Components（`@fluentui/web-components` 3.x，本次核实稳定版 3.1.3，MIT），通过共享 Vue 适配层处理属性、事件、值同步及主题，并补充集成验收要求。
+  - 首版设计器、Runner 和示例插件仅交付 Windows 10/11 x64；移除 Linux 运行模板、AppImage、跨平台组包及 Linux 验收要求，明确后续扩平台需单独调整方案。
+  - 同步更新 [PLAN.md](PLAN.md) 与根目录 [AGENTS.md](../AGENTS.md)，保留 CHG-0001 及 Git 中的历史方案。
+- **修改原因**：用户要求采用 Vue 和适用于 Vue 的 Fluent Design 组件库，并将第一版交付平台限定为 Windows x64。
+- **影响范围**：前端框架、组件集成方式、画布依赖、协议包目标、构建发布及验收范围；应用代码尚未创建。
+- **验证结果**：
+  - 已核对官方 Fluent 仓库、npm 元数据及 Vue 自定义元素文档，确认组件库包名、3.1.3 稳定版本、MIT 许可和 Vue 接入方式，并确认 `vue3-moveable`、`vue3-selecto` 包存在。
+  - 三份文档的 UTF-8、末尾换行、代码围栏及相对文件链接检查通过；当前方案与协作规则中的 Vue/Fluent、Windows x64 范围及方案版本一致。
+  - 历史日志前缀与 Git 中已提交内容逐字节一致，CHG-0001 未改写；变更编号连续且唯一。
+  - `git diff --check` 通过；独立只读审阅未发现旧技术栈、Linux 首版交付承诺或 Fluent 接入说明遗留问题。
+- **未完成事项**：尚未安装依赖或创建应用源码；Vue/Fluent 在 Tauri WebView2 中的集成、Windows 构建和实机串口验证留待实施阶段执行。
