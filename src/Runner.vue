@@ -1,0 +1,19 @@
+<script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { Activity, Play, SquareStop, Settings2, X, AlertCircle } from 'lucide-vue-next'
+import FButton from './components/fluent/FButton.vue'
+import RuntimeView from './components/RuntimeView.vue'
+import { call, desktop, useRuntime } from './lib/backend'
+import { parseProject } from './lib/editor'
+import type { Project } from './lib/model'
+import { refreshAssets } from './lib/resources'
+const project = ref<Project>(), runtime = useRuntime(), error = ref(''), settings = ref(false), ports = ref<{ name: string; description: string }[]>([]), loading = ref(true)
+async function start() { try { if (project.value) { error.value = ''; await runtime.start(project.value) } } catch (reason) { error.value = String(reason) } }
+async function stop() { try { await runtime.stop() } catch (reason) { error.value = String(reason) } }
+async function openSettings() { settings.value = true; try { ports.value = await call('list_serial_ports') } catch (reason) { error.value = String(reason) } }
+async function savePorts() { if (!project.value) return; try { await call('save_runtime_settings', { project: project.value }); settings.value = false } catch (reason) { error.value = String(reason) } }
+onMounted(async () => { try { if (!desktop) throw new Error('独立运行程序需要桌面环境。请使用 HMI Runner 启动已发布的项目。'); project.value = parseProject(JSON.stringify(await call('get_initial_project'))); document.title = project.value.name; if (project.value.assets?.length) await refreshAssets(project.value); await start() } catch (reason) { error.value = String(reason) } finally { loading.value = false } })
+onBeforeUnmount(runtime.dispose)
+</script>
+
+<template><div class="runner-shell"><header class="runner-header"><div class="brand-mark"><Activity :size="20" /></div><strong>{{ project?.name ?? 'HMI Runner' }}</strong><span class="status-pill">{{ loading ? '正在加载' : runtime.running.value ? '运行中' : '已停止' }}</span><span class="spacer" /><FButton :disabled="runtime.busy.value || !project" @click="runtime.running.value ? stop() : start()"><SquareStop v-if="runtime.running.value" :size="15" /><Play v-else :size="15" />{{ runtime.running.value ? '停止运行' : '开始运行' }}</FButton><FButton :disabled="runtime.running.value || !project" @click="openSettings"><Settings2 :size="16" />串口设置</FButton></header><div v-if="error" class="runner-error" role="alert"><AlertCircle :size="18" /><span>{{ error }}</span><button class="icon-button" title="关闭错误" @click="error = ''"><X :size="15" /></button></div><RuntimeView v-if="project" :project="project" :runtime="runtime" @error="error = $event" /><div v-else class="runner-loading">{{ loading ? '正在载入项目…' : '无法载入项目，请检查运行包是否完整。' }}</div><div v-if="settings && project" class="modal-backdrop" @click.self="settings = false"><section class="help-dialog" role="dialog" aria-modal="true" aria-label="串口设置"><div class="inline-between"><h2>串口设置</h2><button class="icon-button" title="关闭" @click="settings = false"><X :size="18" /></button></div><p class="muted-copy">为当前电脑选择设备端口，设置仅保存在本机。</p><label v-for="connection in project.connections" :key="connection.id">{{ connection.name }}<select v-model="connection.port"><option value="sim://temperature">示例模拟设备</option><option v-if="!ports.some(p => p.name === connection.port) && connection.port !== 'sim://temperature'" :value="connection.port">{{ connection.port }}（当前不可用）</option><option v-for="port in ports" :key="port.name" :value="port.name">{{ port.name }} {{ port.description }}</option></select></label><FButton appearance="primary" @click="savePorts">保存设置</FButton></section></div></div></template>

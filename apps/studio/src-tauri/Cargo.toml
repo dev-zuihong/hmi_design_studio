@@ -1,0 +1,17 @@
+[package]
+name = "hmi-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+hmi-desktop = { path = "../../../crates/hmi-desktop" }
+tauri.workspace = true
+tauri-plugin-dialog = "2"
+
+[build-dependencies]
+tauri-build.workspace = true

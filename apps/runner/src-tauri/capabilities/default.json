@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Runtime events and local configuration dialogs",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}

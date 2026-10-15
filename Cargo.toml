@@ -1,0 +1,30 @@
+[workspace]
+members = [
+  "crates/hmi-core",
+  "crates/hmi-python",
+  "crates/demo-protocol",
+  "crates/hmi-desktop",
+  "apps/studio/src-tauri",
+  "apps/runner/src-tauri",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tempfile = "3"
+sha2 = "0.10"
+base64 = "0.22"
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-build = "2"

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "version": "155.0.4283.45",
+  "platform": "windows-x64",
+  "filename": "Microsoft.WebView2.FixedVersionRuntime.155.0.4283.45.x64.cab",
+  "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/01b0fbd9-6ea3-4e12-818a-a71f73f3855b/Microsoft.WebView2.FixedVersionRuntime.155.0.4283.45.x64.cab",
+  "sha256": "ec533bf1b7354d288703cf821a2d640d0130108224f93e330bb9c09faf3f8010",
+  "size": 310544938,
+  "sourcePage": "https://developer.microsoft.com/en-us/microsoft-edge/webview2/",
+  "verifiedDate": "2026-10-15",
+  "authenticodeSigner": "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+  "licenseUrl": "https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download"
+}

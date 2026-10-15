@@ -1,0 +1,540 @@
+{
+  "schemaVersion": 1,
+  "id": "temperature-python",
+  "name": "温度监测工作台 · Python",
+  "width": 1280,
+  "height": 720,
+  "pages": [
+    {
+      "id": "page_main",
+      "name": "主界面",
+      "widgets": [
+        {
+          "id": "widget_3dc791ee",
+          "kind": "text",
+          "name": "文本",
+          "x": 40,
+          "y": 32,
+          "width": 380,
+          "height": 48,
+          "zIndex": 1,
+          "props": {
+            "text": "温度监测",
+            "fontSize": 26,
+            "color": "#242424",
+            "background": "#ffffff",
+            "value": "",
+            "unit": "",
+            "precision": 1,
+            "enabled": true,
+            "visible": true,
+            "options": [
+              "选项一",
+              "选项二"
+            ]
+          },
+          "bindings": {},
+          "events": {}
+        },
+        {
+          "id": "widget_ede1a487",
+          "kind": "text",
+          "name": "文本",
+          "x": 42,
+          "y": 83,
+          "width": 500,
+          "height": 38,
+          "zIndex": 1,
+          "props": {
+            "text": "连接设备，开始采集与控制",
+            "fontSize": 14,
+            "color": "#707070",
+            "background": "#ffffff",
+            "value": "",
+            "unit": "",
+            "precision": 1,
+            "enabled": true,
+            "visible": true,
+            "options": [
+              "选项一",
+              "选项二"
+            ]
+          },
+          "bindings": {},
+          "events": {}
+        },
+        {
+          "id": "widget_30952ebb",
+          "kind": "number",
+          "name": "数值显示",
+          "x": 40,
+          "y": 150,
+          "width": 270,
+          "height": 150,
+          "zIndex": 1,
+          "props": {
+            "text": "当前温度",
+            "fontSize": 14,
+            "color": "#242424",
+            "background": "#ffffff",
+            "value": "",
+            "unit": "°C",
+            "precision": 1,
+            "enabled": true,
+            "visible": true,
+            "options": [
+              "选项一",
+              "选项二"
+            ]
+          },
+          "bindings": {
+            "value": {
+              "source": "variable",
+              "key": "temperature"
+            }
+          },
+          "events": {}
+        },
+        {
+          "id": "widget_d3466c1b",
+          "kind": "indicator",
+          "name": "状态灯",
+          "x": 350,
+          "y": 160,
+          "width": 160,
+          "height": 44,
+          "zIndex": 1,
+          "props": {
+            "text": "采集已启用",
+            "fontSize": 14,
+            "color": "#242424",
+            "background": "#ffffff",
+            "value": false,
+            "unit": "",
+            "precision": 1,
+            "enabled": true,
+            "visible": true,
+            "options": [
+              "选项一",
+              "选项二"
+            ]
+          },
+          "bindings": {
+            "value": {
+              "source": "variable",
+              "key": "collecting"
+            }
+          },
+          "events": {}
+        },
+        {
+          "id": "widget_89995ceb",
+          "kind": "button",
+          "name": "按钮",
+          "x": 350,
+          "y": 235,
+          "width": 140,
+          "height": 40,
+          "zIndex": 1,
+          "props": {
+            "text": "读取温度",
+            "fontSize": 14,
+            "color": "#242424",
+            "background": "#ffffff",
+            "value": "",
+            "unit": "",
+            "precision": 1,
+            "enabled": true,
+            "visible": true,
+            "options": [
+              "选项一",
+              "选项二"
+            ]
+          },
+          "bindings": {},
+          "events": {
+            "click": {
+              "kind": "flow",
+              "flowId": "flow_read",
+              "entryNodeId": "read_trigger"
+            }
+          }
+        },
+        {
+          "id": "widget_4d06d9be",
+          "kind": "button",
+          "name": "按钮",
+          "x": 40,
+          "y": 620,
+          "width": 140,
+          "height": 40,
+          "zIndex": 1,
+          "props": {
+            "text": "打开连接",
+            "fontSize": 14,
+            "color": "#242424",
+            "background": "#ffffff",
+            "value": "",
+            "unit": "",
+            "precision": 1,
+            "enabled": true,
+            "visible": true,
+            "options": [
+              "选项一",
+              "选项二"
+            ]
+          },
+          "bindings": {},
+          "events": {
+            "click": {
+              "kind": "flow",
+              "flowId": "flow_connect",
+              "entryNodeId": "connect_trigger"
+            }
+          }
+        },
+        {
+          "id": "widget_413191fb",
+          "kind": "button",
+          "name": "按钮",
+          "x": 196,
+          "y": 620,
+          "width": 140,
+          "height": 40,
+          "zIndex": 1,
+          "props": {
+            "text": "关闭连接",
+            "fontSize": 14,
+            "color": "#242424",
+            "background": "#ffffff",
+            "value": "",
+            "unit": "",
+            "precision": 1,
+            "enabled": true,
+            "visible": true,
+            "options": [
+              "选项一",
+              "选项二"
+            ]
+          },
+          "bindings": {},
+          "events": {
+            "click": {
+              "kind": "flow",
+              "flowId": "flow_close",
+              "entryNodeId": "close_trigger"
+            }
+          }
+        },
+        {
+          "id": "widget_708b5c14",
+          "kind": "chart",
+          "name": "实时曲线",
+          "x": 40,
+          "y": 330,
+          "width": 720,
+          "height": 250,
+          "zIndex": 1,
+          "props": {
+            "text": "温度趋势",
+            "fontSize": 14,
+            "color": "#242424",
+            "background": "#ffffff",
+            "value": "",
+            "unit": "°C",
+            "precision": 1,
+            "enabled": true,
+            "visible": true,
+            "options": [
+              "选项一",
+              "选项二"
+            ]
+          },
+          "bindings": {
+            "value": {
+              "source": "variable",
+              "key": "temperature"
+            }
+          },
+          "events": {}
+        },
+        {
+          "id": "widget_19316cc1",
+          "kind": "log",
+          "name": "日志面板",
+          "x": 800,
+          "y": 150,
+          "width": 430,
+          "height": 430,
+          "zIndex": 1,
+          "props": {
+            "text": "运行记录",
+            "fontSize": 14,
+            "color": "#242424",
+            "background": "#ffffff",
+            "value": "",
+            "unit": "",
+            "precision": 1,
+            "enabled": true,
+            "visible": true,
+            "options": [
+              "选项一",
+              "选项二"
+            ]
+          },
+          "bindings": {},
+          "events": {}
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "sensor",
+      "name": "温度传感器",
+      "port": "sim://temperature",
+      "baudRate": 115200,
+      "dataBits": 8,
+      "stopBits": 1,
+      "parity": "none",
+      "protocolId": "demo-temperature",
+      "protocolVersion": "1.0.0",
+      "protocolConfig": {}
+    }
+  ],
+  "variables": [
+    {
+      "id": "temperature",
+      "name": "当前温度",
+      "type": "number",
+      "initial": 0
+    },
+    {
+      "id": "collecting",
+      "name": "采集状态",
+      "type": "boolean",
+      "initial": false
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow_connect",
+      "name": "打开设备连接",
+      "enabled": true,
+      "timeoutMs": 30000,
+      "nodes": [
+        {
+          "id": "connect_trigger",
+          "kind": "trigger.ui",
+          "label": "界面事件",
+          "position": {
+            "x": 60,
+            "y": 130
+          },
+          "config": {}
+        },
+        {
+          "id": "connect_open",
+          "kind": "connection.open",
+          "label": "打开连接",
+          "position": {
+            "x": 310,
+            "y": 130
+          },
+          "config": {
+            "connectionId": "sensor"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge_1d624066",
+          "source": "connect_trigger",
+          "sourcePort": "out",
+          "target": "connect_open",
+          "targetPort": "in"
+        }
+      ]
+    },
+    {
+      "id": "flow_read",
+      "name": "读取温度",
+      "enabled": true,
+      "timeoutMs": 30000,
+      "nodes": [
+        {
+          "id": "read_trigger",
+          "kind": "trigger.ui",
+          "label": "界面事件",
+          "position": {
+            "x": 50,
+            "y": 130
+          },
+          "config": {}
+        },
+        {
+          "id": "read_command",
+          "kind": "protocol.command",
+          "label": "协议命令",
+          "position": {
+            "x": 300,
+            "y": 130
+          },
+          "config": {
+            "connectionId": "sensor",
+            "command": "read",
+            "params": {}
+          }
+        },
+        {
+          "id": "read_python",
+          "kind": "python",
+          "label": "Python conversion",
+          "position": {
+            "x": 550,
+            "y": 130
+          },
+          "config": {
+            "code": "def transform(msg):\n    import math\n    raw = float(msg[\"payload\"][\"rawTemperature\"])\n    if not math.isfinite(raw):\n        raise ValueError(\"Invalid temperature\")\n    msg[\"payload\"] = {\"temperature\": raw / 10}\n    print(\"temperature:\", msg[\"payload\"][\"temperature\"])\n    return msg\n",
+            "timeoutMs": 5000,
+            "memoryMb": 256
+          }
+        },
+        {
+          "id": "read_condition",
+          "kind": "condition",
+          "label": "Valid range",
+          "position": {
+            "x": 800,
+            "y": 130
+          },
+          "config": {
+            "left": {
+              "source": "message",
+              "path": "payload.temperature"
+            },
+            "operator": "gte",
+            "right": {
+              "source": "literal",
+              "value": -273.15
+            }
+          }
+        },
+        {
+          "id": "read_set",
+          "kind": "variable.set",
+          "label": "写入变量",
+          "position": {
+            "x": 1050,
+            "y": 130
+          },
+          "config": {
+            "variableId": "temperature",
+            "value": {
+              "source": "message",
+              "path": "payload.temperature"
+            }
+          }
+        },
+        {
+          "id": "read_log",
+          "kind": "log",
+          "label": "调试日志",
+          "position": {
+            "x": 1300,
+            "y": 130
+          },
+          "config": {
+            "value": {
+              "source": "message",
+              "path": "payload"
+            },
+            "level": "info"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge_read_0",
+          "source": "read_trigger",
+          "sourcePort": "out",
+          "target": "read_command",
+          "targetPort": "in"
+        },
+        {
+          "id": "edge_read_1",
+          "source": "read_command",
+          "sourcePort": "out",
+          "target": "read_python",
+          "targetPort": "in"
+        },
+        {
+          "id": "edge_read_2",
+          "source": "read_python",
+          "sourcePort": "out",
+          "target": "read_condition",
+          "targetPort": "in"
+        },
+        {
+          "id": "edge_read_3",
+          "source": "read_condition",
+          "sourcePort": "true",
+          "target": "read_set",
+          "targetPort": "in"
+        },
+        {
+          "id": "edge_read_4",
+          "source": "read_set",
+          "sourcePort": "out",
+          "target": "read_log",
+          "targetPort": "in"
+        }
+      ]
+    },
+    {
+      "id": "flow_close",
+      "name": "关闭设备连接",
+      "enabled": true,
+      "timeoutMs": 30000,
+      "nodes": [
+        {
+          "id": "close_trigger",
+          "kind": "trigger.ui",
+          "label": "界面事件",
+          "position": {
+            "x": 60,
+            "y": 130
+          },
+          "config": {}
+        },
+        {
+          "id": "close_close",
+          "kind": "connection.close",
+          "label": "关闭连接",
+          "position": {
+            "x": 310,
+            "y": 130
+          },
+          "config": {
+            "connectionId": "sensor"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge_1fee3d29",
+          "source": "close_trigger",
+          "sourcePort": "out",
+          "target": "close_close",
+          "targetPort": "in"
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "python": {
+    "runtimeId": "3.14.8-win_amd64",
+    "runtimeSha256": "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310",
+    "dependencyLock": []
+  }
+}

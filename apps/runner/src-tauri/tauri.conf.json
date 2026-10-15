@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HMI Runtime",
+  "version": "0.1.0",
+  "identifier": "com.hmistudio.runtime",
+  "build": {
+    "frontendDist": "../../../dist-runner"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "HMI Runtime",
+        "url": "runner.html",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 640,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' asset: http://asset.localhost data:; connect-src ipc: http://ipc.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "../../../resources/icon.ico"
+    ]
+  }
+}

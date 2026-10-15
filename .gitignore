@@ -1,0 +1,16 @@
+node_modules/
+target/
+dist/
+dist-runner/
+.cache/
+artifacts/
+test-results/
+playwright-report/
+coverage/
+*.log
+__pycache__/
+*.py[cod]
+.DS_Store
+.env.local
+*.tsbuildinfo
+apps/*/src-tauri/gen/
