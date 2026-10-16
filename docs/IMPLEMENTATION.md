@@ -1,12 +1,12 @@
-# 当前实现接口（0.2.0）
+# 当前实现接口（0.3.0）
 
-本文件固定当前模块间契约，补充 [PLAN.md](PLAN.md)。CHG-0004 为首版基线，CHG-0008～0012 扩展工程、编辑和预览；字段采用 camelCase，内存项目 `schemaVersion` 为 2，兼容读取 v1。Rust 模型在 `hmi-core`，前端模型在 `src/lib/model.ts`，两者须用同一示例项目交叉验证。自动布局页面在 responsive 开启时按运行窗口可用尺寸重排、比例为 1；关闭 responsive 或使用绝对布局时按项目设计尺寸等比适配。
+本文件固定当前模块间契约，补充 [PLAN.md](PLAN.md)。CHG-0004 为首版基线，CHG-0008～0012 扩展工程、编辑和预览；字段采用 camelCase，PTB 工程 `schemaVersion` 为 3，兼容读取 v1/v2，既有工程保留 v2。Rust 模型在 `hmi-core`，前端模型在 `src/lib/model.ts`，两者须用同一示例项目交叉验证。自动布局页面在 responsive 开启时按运行窗口可用尺寸重排、比例为 1；关闭 responsive 或使用绝对布局时按项目设计尺寸等比适配。
 
 ## 项目 JSON
 
 ```typescript
 interface Project {
-  schemaVersion: 1 | 2; id: string; name: string;
+  schemaVersion: 1 | 2 | 3; id: string; name: string;
   width: number; height: number;
   pages: Page[]; connections: ConnectionConfig[];
   variables: Variable[]; flows: Flow[];
@@ -132,14 +132,14 @@ WorkspaceStore 是同一Studio工程的唯一权威状态；两个编辑WebView�
 | `set_preview_locale` | `{locale,expectedGeneration?}` → void；不重启会话 |
 | `trigger_flow` | `{flowId, entryNodeId?, message, inputs}` → runId |
 | `start_flow` / `stop_flow` | `{flowId}` → void；宿主管理操作 |
-| `runtime_snapshot` | → `{variables, points, connections, flows, logs, ui, inputs}`，各 map 以 ID 为键，ui 为运行时属性覆盖 |
+| `runtime_snapshot` | → `{variables, points, connections, backends, flows, logs, ui, windowUi, inputs}`，各 map 以 ID 为键，ui 为主窗运行属性，windowUi 为独立窗口属性 |
 | `open_connection` / `close_connection` | `{connectionId}` → void；仅运行会话有效 |
 | `export_project` | `{project, destination}` → `{path, files, includesPython}`；destination 是新 ZIP 路径 |
 | `import_python_runtime` | `{path}`：导入已准备且匹配宿主的资源目录 → `{runtimeId,runtimeSha256,dependencyLock}`；含 Python 节点的项目通过此显式操作切换对应平台资源，同一 runtime 重导入只更新摘要并保留项目已有依赖锁 |
 | `import_python_dependencies` | `{path}`：暂存含 lock 的完整 Python 环境目录 → `{runtimeId,runtimeSha256,dependencyLock}`；由发起窗口提交一次工程操作，纳入该窗口撤销历史 |
-| `import_asset` | `{path}`：复制图片/字体到当前工作副本的 assets 目录，首次保存前也可用 → `{id,path,absolutePath}` |
+| `import_asset` | `{path}`：复制图片/字体或 BIN/HEX/IHX/PTBCFG/JSON 工程文件到当前工作副本的 assets 目录，首次保存前也可用 → `{id,path,absolutePath,name,size,sha256}` |
 | `resolve_assets` | `{project}` → 资源 ID 到项目内绝对路径；Vue 使用 Tauri asset URL |
-| `save_runtime_settings` | `{project}`：Runner 停止状态下保存端口选择到当前用户目录 |
+| `save_runtime_settings` | `{project}`：Runner 停止状态下保存端口和后端模式到当前用户目录 |
 
 文件选择由 `@tauri-apps/plugin-dialog` 完成，读写由上述命令负责。运行事件通过 `runtime-event` 推送，统一信封 `{kind, timestamp, revision?, runId?, flowId?, nodeId?, data}`；kind 包含 `run.started/run.completed/run.failed/run.cancelled/node.started/node.completed/node.failed/variable.changed/point.changed/connection.changed/page.changed/ui.property.changed/log/flow.changed`。`data` 内含对应键和值或结构化错误。revision 为运行时实际应用序号，从初始 0 起按实际切换递增，标明任务捕获的运行版本；它与 Workspace 候选 revision 分开，候选跳号或被合并时两者不相等。预览状态的 revision 则是已应用的 Workspace 候选编号；前端可在收到事件后刷新快照，日志以事件信封保留。
 
@@ -150,3 +150,16 @@ Studio 的运行控制、连接、快照及停止命令支持可选 `expectedGen
 Runner 模板为 `.cache/templates/<platform>`：Windows 包含 `HmiRunner.exe`，macOS 包含无项目资源的 `HmiRunner.app/Contents/MacOS/hmi-runner`。Windows 发布目录保持 `project.json`、`plugins/`、按需 `runtime/python/` 与 `.cache/webview2` 固定运行时；macOS 将项目、插件、资源和按需 Python 放入 `HmiRunner.app/Contents/Resources`，由 app 可执行文件位置解析，使用系统 WKWebView。
 
 macOS Studio 初次启动从 app 的 `Contents/Resources` 为当前用户初始化 `HmiStudio/resources/<applicationVersion>/<platform>` 可写缓存（在系统 Application Support 目录），之后导入不修改已签名的 app。同版本构建的 Runner 模板按可执行文件 SHA-256 比较并原子刷新，失败恢复原模板；已有用户插件/Python 缓存不被模板刷新覆盖。开发时可用 `HMI_RESOURCE_ROOT` 指定资源目录；打包 Runner 优先使用 app 内资源，不被该开发变量覆盖。macOS ZIP 保留 Unix 权限，重新 ad-hoc 签名后再计算发布文件 SHA-256；组内 Python 子进程使用独立进程组清理与采样 RSS 限制，具体边界见 [PLAN.md](PLAN.md)。
+
+
+## PTB 扩展接口（CHG-0015）
+
+schema 3 的 `backends` 元素为 `{id,name,providerId,providerVersion,mode,config}`；`windows` 元素为 `{id,pageId,title,width,height,minWidth?,minHeight?,instanceKey?}`。`ValueRef` 增加 `{source:'backend',key,path}`、`{source:'context',path}`。快照增加 `backends` 与按窗口实例组织的 `windowUi`；控件事件消息的 `context` 携带 `windowInstanceId/deviceKey/backendId/generation`。相同流程按窗口实例单飞，停止流程仍能停止全部实例。
+
+`HostServices.backend_invoke` 由 `BackendManager` 执行；`HostServices.host_action` 经有界请求队列交给桌面宿主，返回实际窗口或文件操作结果。支持 `backend.invoke/trigger.backend/window.open/window.focus/window.close/file.open/file.save`。文件引用是宿主注册的不可变快照；`.ptbcfg` 选择时解析本地伴随文件引用，保存时校验并复制附件。`hmi-cli package` 使用与设计器相同的工程包写入器；CLI smoke 仅允许显式模拟连接和模拟后端。
+
+后端资源目录为 `backends/<target>/<providerId>`（工程/缓存）或 `backends/<providerId>`（独立运行）。工程导入、保存、预览资源快照和独立运行导出均包含这些目录。具体清单、协议、组件属性及 PTB 操作参见 [ING-PTB.md](ING-PTB.md) 和后端清单。
+
+新增桌面命令 `import_backend({path})` 导入后端目录；`runtime_import_file({path})` 返回运行文件快照及配置附件引用；`get_runtime_window_state()` 按调用窗口返回实例、工程和快照，`update_runtime_window_input({id,value})` 仅更新该实例输入。设备拔出、后端失败或代次变化关闭对应窗口，模板或后端删除在工程应用后清理；关闭 Runner 主窗先收尾会话并关闭所有子窗。
+
+资源屏障同时等待流程和已受理后端任务；资源身份包含配置与文件摘要，等内容复制不重启后端。同路径内容变化可被新候选识别。重建保留运行文件快照；失败恢复旧后端和连接，释放触发屏障。窗口 UI 热更仍使用实例上下文与独立输入，不套用主窗状态。

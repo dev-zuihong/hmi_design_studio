@@ -6,6 +6,7 @@ import type { Environment, Project, RuntimeEvent, Snapshot, UiAction, Validation
 import { applyEnvironment, platformLabel } from './platform'
 import { downloadProjectPackage } from './project-package'
 import { projectLocale } from './i18n'
+import { resolveRuntimePath } from './widgets'
 export const desktop = isTauri()
 export function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!desktop) return Promise.reject(new Error('请在桌面版中执行此操作；浏览器模式支持项目设计与保存。'))
@@ -30,9 +31,18 @@ export interface PreviewState {
   pid?: number
   locale?: string
 }
-export function useRuntime(options: { previewWindow?: boolean } = {}) {
+interface RuntimeWindowState {
+  instance: { context: Record<string, any>; pageId: string; windowId: string; inputs: Record<string, unknown> }
+  project: Project
+  snapshot: Snapshot
+  generation?: number
+  revision: number
+}
+export function useRuntime(options: { previewWindow?: boolean; runtimeWindow?: boolean } = {}) {
   const running = ref(false), busy = ref(false), snapshot = ref<Snapshot>(blankSnapshot()), events = ref<RuntimeEvent[]>([]), inputs = ref<Record<string, unknown>>({}), currentPage = ref('')
   const previewProject = ref<Project>(), generation = ref(-1), revision = ref(0), updateStatus = ref('applied'), pid = ref<number>()
+  const context = ref<Record<string, any>>({}), windowSize = ref<{width:number;height:number}>()
+  const lastError = ref('')
   let unlistenLocale: UnlistenFn | undefined
   let unlisten: UnlistenFn | undefined, unlistenState: UnlistenFn | undefined, unlistenInputs: UnlistenFn | undefined
   let subscribing: Promise<void> | undefined, subscribingState: Promise<void> | undefined, subscribingInputs: Promise<void> | undefined
@@ -40,6 +50,8 @@ export function useRuntime(options: { previewWindow?: boolean } = {}) {
   let stateSync: Promise<void> | undefined, stateAgain = false
   const replayPending = new Map<string, number>()
   const liveInputs = new Map<string, { generation: number; value: unknown }>()
+  const invalidatedInputs = new Set<string>()
+  let hasSnapshot = false
   let livePage: { generation: number; pageId: string } | undefined
   const eventKey = (event: RuntimeEvent) => {
     const body = { ...event }; delete body.generation
@@ -47,10 +59,27 @@ export function useRuntime(options: { previewWindow?: boolean } = {}) {
       ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value)
   }
   const expectedGeneration = () => generation.value >= 0 ? { expectedGeneration: generation.value } : {}
+  function applySnapshot(next: Snapshot, previousContext = context.value) {
+    if (!hasSnapshot) { snapshot.value = next; hasSnapshot = true; return }
+    const resolve = (binding: any, state: Snapshot, scope: Record<string, any>) => binding.source === 'backend'
+      ? resolveRuntimePath(state.backends?.[binding.key], binding.path, scope)
+      : resolveRuntimePath(scope, binding.path, scope)
+    const comparable = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item)
+    for (const widget of previewProject.value?.pages.flatMap(page => page.widgets) ?? []) {
+      const binding = widget.bindings.value
+      if (binding?.source !== 'backend' && binding?.source !== 'context') continue
+      if (comparable(resolve(binding, snapshot.value, previousContext)) === comparable(resolve(binding, next, context.value))) continue
+      delete inputs.value[widget.id]
+      liveInputs.delete(widget.id)
+      invalidatedInputs.add(widget.id)
+    }
+    snapshot.value = next
+  }
   function initializeInputs(project: Project, live?: Snapshot) {
     inputs.value = {}
-    for (const widget of project.pages.flatMap(page => page.widgets).filter(widget => ['input','textarea','select','switch','checkbox','radio','spinbox','slider','date','time','datetime','table','list','tree','tabs','stack'].includes(widget.kind))) {
+    for (const widget of project.pages.flatMap(page => page.widgets).filter(widget => ['input','textarea','select','switch','checkbox','radio','spinbox','slider','date','time','datetime','table','list','tree','tabs','stack','file-picker','byte-range'].includes(widget.kind))) {
       const binding = widget.bindings.value
+      if(binding?.source==='backend'||binding?.source==='context')continue
       if (binding?.source === 'variable') inputs.value[widget.id] = live?.variables[binding.key] ?? project.variables.find(variable => variable.id === binding.key)?.initial
       else if (binding?.source === 'literal') inputs.value[widget.id] = binding.value
       else if (binding?.source === 'point') {
@@ -61,6 +90,7 @@ export function useRuntime(options: { previewWindow?: boolean } = {}) {
     }
   }
   function stopped() {
+    hasSnapshot = false; invalidatedInputs.clear()
     epoch++; running.value = false; previewProject.value = undefined; snapshot.value = blankSnapshot(); replayPending.clear()
     for (const [id, input] of liveInputs) if (generation.value < 0 || input.generation <= generation.value) liveInputs.delete(id)
     if (generation.value < 0 || livePage && livePage.generation <= generation.value) livePage = undefined
@@ -100,7 +130,7 @@ export function useRuntime(options: { previewWindow?: boolean } = {}) {
     for (const [id,input] of liveInputs) if (input.generation === state.generation) inputs.value[id] = input.value
     previewProject.value = state.project
     running.value = true
-    if (state.snapshot) snapshot.value = state.snapshot
+    if (state.snapshot) applySnapshot(state.snapshot)
   }
   async function refresh() {
     if (!running.value || disposed) return
@@ -110,7 +140,7 @@ export function useRuntime(options: { previewWindow?: boolean } = {}) {
       do {
         refreshAgain = false
         const requestedEpoch = epoch, next = await call<Snapshot>('runtime_snapshot', expectedGeneration())
-        if (running.value && !disposed && requestedEpoch === epoch) snapshot.value = next
+        if (running.value && !disposed && requestedEpoch === epoch) applySnapshot(next)
       } while (refreshAgain && running.value && !disposed)
     } finally { refreshPending = false }
   }
@@ -122,12 +152,16 @@ export function useRuntime(options: { previewWindow?: boolean } = {}) {
         if (disposed) return
         const eventGeneration = event.payload.generation ?? generation.value
         if (generation.value >= 0 && eventGeneration < generation.value) return
-        if (event.payload.kind === 'page.changed') livePage = { generation: eventGeneration, pageId: event.payload.data.pageId ?? event.payload.data.id ?? '' }
+        const eventWindow = event.payload.data?.windowInstanceId
+        if (eventWindow && eventWindow !== context.value.windowInstanceId) return
+        if(event.payload.kind==='run.failed')lastError.value=String(event.payload.data?.error?.message??'流程执行失败')
+        if (event.payload.kind === 'page.changed' && (!options.runtimeWindow || eventWindow)) livePage = { generation: eventGeneration, pageId: event.payload.data.pageId ?? event.payload.data.id ?? '' }
         if (generation.value >= 0 && eventGeneration > generation.value) return
+        if(event.payload.kind==='backend.event'&&event.payload.data?.kind==='snapshot'){void refresh().catch(()=>{});return}
         const key = eventKey(event.payload), replay = replayPending.get(key) ?? 0
         if (replay) replayPending.set(key, replay - 1)
         else { events.value.push(event.payload); if (events.value.length > 1500) events.value.splice(0, events.value.length - 1500) }
-        if (event.payload.kind === 'page.changed') {
+        if (event.payload.kind === 'page.changed' && (!options.runtimeWindow || eventWindow)) {
           currentPage.value = event.payload.data.pageId ?? event.payload.data.id ?? ''
         }
         void refresh().catch(() => {})
@@ -186,10 +220,65 @@ export function useRuntime(options: { previewWindow?: boolean } = {}) {
     await syncPreviewState()
   }
   async function updateInput(id: string, value: unknown) {
+    invalidatedInputs.delete(id)
     inputs.value[id] = value
     liveInputs.set(id, { generation: generation.value, value })
-    if (running.value && desktop) await call('update_preview_input', { id, value, ...expectedGeneration() })
+    if (running.value && desktop) await call(options.runtimeWindow ? 'update_runtime_window_input' : 'update_preview_input', { id, value, ...expectedGeneration() })
     if (options.previewWindow && running.value) await emit('preview-input-changed', { generation: generation.value, id, value })
+  }
+  function applyWindowState(state: RuntimeWindowState) {
+    const nextGeneration = state.generation ?? -1
+    if (nextGeneration < generation.value || nextGeneration === generation.value && state.revision < revision.value) return
+    epoch++
+    const previousContext = context.value
+    context.value = state.instance.context
+    generation.value = nextGeneration
+    revision.value = state.revision
+    previewProject.value = state.project
+    currentPage.value = livePage?.generation === nextGeneration ? livePage.pageId : state.instance.pageId
+    const template = state.project.windows?.find(item=>item.id===state.instance.windowId)
+    windowSize.value = template ? {width:template.width,height:template.height} : undefined
+    // A window never hydrates inputs from the main session snapshot. Keep edits
+    // made during an in-flight state request scoped to this instance.
+    inputs.value = Object.fromEntries(Object.entries(state.instance.inputs).filter(([id]) => !invalidatedInputs.has(id)))
+    const widgetIds = new Set(state.project.pages.flatMap(page => page.widgets.map(widget => widget.id)))
+    for (const [id, input] of liveInputs) if (input.generation === nextGeneration && widgetIds.has(id)) inputs.value[id] = input.value
+    applySnapshot(state.snapshot, previousContext)
+    running.value = true
+  }
+  function syncWindowState(): Promise<void> {
+    if (stateSync) { stateAgain = true; return stateSync }
+    stateSync = (async () => {
+      do {
+        stateAgain = false
+        const requestedRevision = lifecycleRevision
+        const state = await call<RuntimeWindowState>('get_runtime_window_state')
+        if (!disposed && requestedRevision === lifecycleRevision) applyWindowState(state)
+      } while (stateAgain && !disposed)
+    })().finally(() => stateSync = undefined)
+    return stateSync
+  }
+  async function connectWindow() {
+    if (!desktop || disposed) return
+    await subscribe()
+    if (!unlistenState) {
+      subscribingState ??= (async () => {
+        const off = await listen<{running:boolean;generation:number;revision?:number;locale?:string;status?:string}>('preview-state-changed', event => {
+          const state = event.payload
+          if (disposed || state.generation < generation.value) return
+          if (state.locale) projectLocale.value = state.locale
+          if (state.status) updateStatus.value = state.status
+          if (state.running && state.generation === generation.value && state.revision !== undefined && state.revision <= revision.value) return
+          lifecycleRevision++
+          generation.value = state.generation
+          if (!state.running) stopped()
+          else void syncWindowState().catch(error => { if (!disposed) lastError.value = String(error) })
+        })
+        if (disposed) off(); else unlistenState = off
+      })().finally(() => subscribingState = undefined)
+      await subscribingState
+    }
+    if (!disposed) await syncWindowState()
   }
   async function openPreview(project: Project) {
     busy.value = true
@@ -211,8 +300,8 @@ export function useRuntime(options: { previewWindow?: boolean } = {}) {
   async function start(project: Project) {
     busy.value = true
     try {
-      await subscribe(); epoch++; events.value = []; replayPending.clear(); initializeInputs(project)
-      currentPage.value = project.pages[0]?.id ?? ''; await call('start_preview', { project }); running.value = true; await refresh()
+      await subscribe(); epoch++; hasSnapshot = false; invalidatedInputs.clear(); events.value = []; replayPending.clear(); initializeInputs(project)
+      previewProject.value=project;currentPage.value = project.pages[0]?.id ?? ''; await call('start_preview', { project }); running.value = true; await refresh()
     } finally { busy.value = false }
   }
   async function stop() { busy.value = true; try { await call('stop_preview', expectedGeneration()); lifecycleRevision++; stopped() } finally { busy.value = false } }
@@ -220,11 +309,15 @@ export function useRuntime(options: { previewWindow?: boolean } = {}) {
     if (!running.value) throw new Error('请先启动运行会话')
     if (action.kind === 'startFlow') await call('start_flow', { flowId: action.flowId, ...expectedGeneration() })
     else if (action.kind === 'stopFlow') await call('stop_flow', { flowId: action.flowId, ...expectedGeneration() })
-    else await call('trigger_flow', { flowId: action.flowId, entryNodeId: action.entryNodeId, message: { payload: value ?? {} }, inputs: { ...inputs.value }, ...expectedGeneration() })
+    else {
+      const effectiveInputs:Record<string,unknown>={}
+      for(const widget of previewProject.value?.pages.flatMap(page=>page.widgets)??[]){const binding=widget.bindings.value;if(binding?.source==='backend')effectiveInputs[widget.id]=resolveRuntimePath(snapshot.value.backends?.[binding.key],binding.path,context.value);else if(binding?.source==='context')effectiveInputs[widget.id]=resolveRuntimePath(context.value,binding.path,context.value)}
+      await call('trigger_flow', { flowId: action.flowId, entryNodeId: action.entryNodeId, message: { payload: value ?? {}, ...(Object.keys(context.value).length?{context:{...context.value}}:{}) }, inputs: { ...effectiveInputs,...inputs.value }, ...expectedGeneration() })
+    }
     await refresh()
   }
   function dispose() { unlistenLocale?.(); disposed = true; epoch++; unlisten?.(); unlisten = undefined; unlistenState?.(); unlistenState = undefined; unlistenInputs?.(); unlistenInputs = undefined }
-  return { running, busy, snapshot, events, inputs, currentPage, previewProject, generation, revision, updateStatus, pid, start, stop, act, refresh, subscribe, connectPreview, openPreview, updatePreview, updateInput, dispose }
+  return { running, busy, snapshot, events, inputs, currentPage, previewProject, generation, revision, updateStatus, pid, context, windowSize, lastError, start, stop, act, refresh, subscribe, connectPreview, connectWindow, openPreview, updatePreview, updateInput, dispose }
 }
 export type Runtime = ReturnType<typeof useRuntime>
 export const getEnvironment = async () => { const environment = await call<Environment>('get_environment'); applyEnvironment(environment); return environment }

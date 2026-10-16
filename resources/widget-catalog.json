@@ -170,7 +170,13 @@
       "defaults": {
         "text": "请输入",
         "value": "",
-        "placeholder": "请输入"
+        "placeholder": "请输入",
+        "format": "text",
+        "pattern": "",
+        "maxLength": 0,
+        "required": false,
+        "readOnly": false,
+        "commitMode": "input"
       },
       "propertyGroups": {
         "input": [
@@ -184,6 +190,46 @@
             "key": "value",
             "label": "初始值",
             "type": "string"
+          },
+          {
+            "key": "format",
+            "label": "输入格式",
+            "type": "enum",
+            "options": [
+              "text",
+              "hex",
+              "address"
+            ]
+          },
+          {
+            "key": "pattern",
+            "label": "校验表达式",
+            "type": "string"
+          },
+          {
+            "key": "maxLength",
+            "label": "最大长度",
+            "type": "number"
+          },
+          {
+            "key": "required",
+            "label": "必填",
+            "type": "boolean"
+          },
+          {
+            "key": "readOnly",
+            "label": "只读",
+            "type": "boolean"
+          },
+          {
+            "key": "commitMode",
+            "label": "提交时机",
+            "type": "enum",
+            "options": [
+              "input",
+              "change",
+              "enter"
+            ]
           }
         ]
       }
@@ -584,7 +630,8 @@
         "value": 0,
         "min": 0,
         "max": 100,
-        "showValue": true
+        "showValue": true,
+        "indeterminate": false
       },
       "propertyGroups": {
         "data": [
@@ -606,6 +653,11 @@
           {
             "key": "showValue",
             "label": "显示百分比",
+            "type": "boolean"
+          },
+          {
+            "key": "indeterminate",
+            "label": "不确定进度",
             "type": "boolean"
           }
         ]
@@ -651,7 +703,13 @@
       "height": 180,
       "defaults": {
         "text": "运行记录",
-        "maxLines": 100
+        "maxLines": 100,
+        "source": "events",
+        "entries": [],
+        "autoScroll": true,
+        "wrap": true,
+        "level": "all",
+        "deviceKey": ""
       },
       "propertyGroups": {
         "data": [
@@ -659,6 +717,48 @@
             "key": "maxLines",
             "label": "最大行数",
             "type": "number"
+          },
+          {
+            "key": "source",
+            "label": "日志来源",
+            "type": "enum",
+            "options": [
+              "events",
+              "entries"
+            ]
+          },
+          {
+            "key": "entries",
+            "label": "日志条目",
+            "type": "json"
+          },
+          {
+            "key": "autoScroll",
+            "label": "自动滚动",
+            "type": "boolean"
+          },
+          {
+            "key": "wrap",
+            "label": "自动换行",
+            "type": "boolean"
+          },
+          {
+            "key": "level",
+            "label": "日志级别",
+            "type": "enum",
+            "options": [
+              "all",
+              "debug",
+              "info",
+              "warn",
+              "warning",
+              "error"
+            ]
+          },
+          {
+            "key": "deviceKey",
+            "label": "设备筛选",
+            "type": "string"
           }
         ]
       }
@@ -762,10 +862,16 @@
           }
         ],
         "sortable": true,
-        "selectable": true
+        "selectable": true,
+        "rowKey": "id"
       },
       "propertyGroups": {
         "data": [
+          {
+            "key": "rowKey",
+            "label": "行标识字段",
+            "type": "string"
+          },
           {
             "key": "columns",
             "label": "列配置",
@@ -878,7 +984,27 @@
       ],
       "defaults": {
         "text": "",
-        "activeSlot": "tab_1"
+        "activeSlot": "tab_1",
+        "tabPlacement": "top",
+        "tabWidth": 120
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "tabPlacement",
+            "label": "选项卡位置",
+            "type": "enum",
+            "options": [
+              "top",
+              "left"
+            ]
+          },
+          {
+            "key": "tabWidth",
+            "label": "选项卡宽度",
+            "type": "number"
+          }
+        ]
       }
     },
     {
@@ -1104,6 +1230,149 @@
             "key": "flex",
             "label": "伸缩权重",
             "type": "number"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "file-picker",
+      "label": "文件选择",
+      "group": "输入",
+      "icon": "FolderOpen",
+      "width": 420,
+      "height": 72,
+      "defaults": {
+        "text": "文件",
+        "value": null,
+        "accept": ".bin,.hex,.ihx",
+        "allowManualPath": false,
+        "clearable": true,
+        "readOnly": false,
+        "status": "",
+        "message": ""
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "初始文件引用",
+            "type": "json"
+          },
+          {
+            "key": "accept",
+            "label": "文件类型",
+            "type": "string"
+          },
+          {
+            "key": "allowManualPath",
+            "label": "允许手动路径",
+            "type": "boolean"
+          },
+          {
+            "key": "clearable",
+            "label": "允许清除",
+            "type": "boolean"
+          },
+          {
+            "key": "readOnly",
+            "label": "只读",
+            "type": "boolean"
+          }
+        ],
+        "data": [
+          {
+            "key": "status",
+            "label": "状态",
+            "type": "string"
+          },
+          {
+            "key": "message",
+            "label": "状态说明",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "byte-range",
+      "label": "连续字节选择",
+      "group": "输入",
+      "icon": "BetweenHorizontalStart",
+      "width": 440,
+      "height": 140,
+      "defaults": {
+        "text": "连续字节",
+        "value": {
+          "startByte": 0,
+          "byteCount": 4
+        },
+        "byteLength": 4,
+        "allowEmpty": false,
+        "readOnly": false
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "选择区间",
+            "type": "json"
+          },
+          {
+            "key": "byteLength",
+            "label": "总字节数",
+            "type": "number"
+          },
+          {
+            "key": "allowEmpty",
+            "label": "允许空区间",
+            "type": "boolean"
+          },
+          {
+            "key": "readOnly",
+            "label": "只读",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "memory-map",
+      "label": "内存分布图",
+      "group": "数据",
+      "icon": "ChartNoAxesGantt",
+      "width": 500,
+      "height": 180,
+      "defaults": {
+        "text": "内存分布",
+        "rangeStart": 0,
+        "rangeSize": 1048576,
+        "segments": [
+          {
+            "id": "segment_1",
+            "label": "固件",
+            "start": 0,
+            "size": 262144,
+            "color": "#0f6cbd",
+            "enabled": true
+          }
+        ]
+      },
+      "propertyGroups": {
+        "data": [
+          {
+            "key": "rangeStart",
+            "label": "起始地址",
+            "type": "number"
+          },
+          {
+            "key": "rangeSize",
+            "label": "地址空间字节数",
+            "type": "number"
+          },
+          {
+            "key": "segments",
+            "label": "内存分段",
+            "type": "json"
           }
         ]
       }

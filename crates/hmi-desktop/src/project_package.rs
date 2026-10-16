@@ -32,7 +32,7 @@ pub struct PackageFile {
     pub unix_mode: Option<u32>,
 }
 
-fn safe_relative(path: &str) -> Result<PathBuf> {
+pub(crate) fn safe_relative(path: &str) -> Result<PathBuf> {
     if path.contains('\\')
         || path.contains(':')
         || path.contains('\0')
@@ -728,5 +728,64 @@ mod tests {
         .find(|issue| issue.severity == "error")
         .map_or((), |issue| panic!("{}: {}", issue.path, issue.message));
         write_package_with_missing(&output, &project, &resources_root, Vec::new()).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a prepared schema 3 backend engineering package"]
+    fn verify_backend_package_interop_when_requested() {
+        let input = PathBuf::from(
+            std::env::var_os("HMI_BACKEND_PACKAGE_IN").expect("HMI_BACKEND_PACKAGE_IN"),
+        );
+        let output = PathBuf::from(
+            std::env::var_os("HMI_BACKEND_PACKAGE_OUT").expect("HMI_BACKEND_PACKAGE_OUT"),
+        );
+        let source = tempfile::tempdir().unwrap();
+        let (project, manifest) = read_package(&input, &source.path().join("source")).unwrap();
+        assert_eq!(project.schema_version, 3);
+        assert!(!project.backends.is_empty());
+        assert!(!project.windows.is_empty());
+        assert!(project
+            .flows
+            .iter()
+            .flat_map(|flow| &flow.nodes)
+            .any(|node| node.kind == "backend.invoke"));
+        assert!(hmi_core::validate_project(&project)
+            .iter()
+            .all(|issue| issue.severity != "error"));
+        assert!(
+            manifest.missing_dependencies.is_empty(),
+            "{:?}",
+            manifest.missing_dependencies
+        );
+        write_package_with_missing(
+            &output,
+            &project,
+            &source.path().join("source"),
+            manifest.missing_dependencies,
+        )
+        .unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let (round_trip, round_manifest) =
+            read_package(&output, &target.path().join("target")).unwrap();
+        assert_eq!(
+            serde_json::to_value(&project).unwrap(),
+            serde_json::to_value(&round_trip).unwrap()
+        );
+        let mut verified_files = 0;
+        for path in manifest
+            .files
+            .keys()
+            .filter(|path| path.starts_with("backends/") || path.starts_with("assets/"))
+        {
+            assert!(round_manifest.files.contains_key(path), "missing {path}");
+            assert_eq!(
+                fs::read(source.path().join("source").join(path)).unwrap(),
+                fs::read(target.path().join("target").join(path)).unwrap(),
+                "changed {path}"
+            );
+            verified_files += 1;
+        }
+        assert!(verified_files >= project.assets.len() + project.backends.len());
+        println!("Verified schema 3, {} windows, {} flows, and {verified_files} backend/asset files byte-for-byte", project.windows.len(), project.flows.len());
     }
 }

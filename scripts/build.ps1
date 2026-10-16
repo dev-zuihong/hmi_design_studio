@@ -29,7 +29,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $binaries 'hmi-studio.exe') -Destination (Join-Path $distribution 'HmiStudio.exe')
     $resources = Join-Path $distribution 'resources'
     New-Item -ItemType Directory -Path $resources | Out-Null
-    foreach ($resourceName in @('templates','plugins','webview2')) {
+    foreach ($resourceName in @('templates','plugins','backends','webview2')) {
         $source = Join-Path $workspace ".cache/$resourceName"
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $resources -Recurse }
     }

@@ -241,6 +241,10 @@ impl Resources {
             self.root.join("plugins")
         }
     }
+    pub fn backends(&self) -> PathBuf {
+        let target = self.root.join("backends").join(hmi_core::host_target());
+        if target.exists() { target } else { self.root.join("backends") }
+    }
     pub fn template(&self) -> PathBuf {
         self.root.join("templates").join(release_platform())
     }

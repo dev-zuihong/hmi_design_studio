@@ -17,6 +17,28 @@ pub const MAX_RUN_QUEUE: usize = 256;
 
 #[async_trait]
 pub trait HostServices: Send + Sync + 'static {
+    async fn backend_invoke(
+        &self,
+        _id: &str,
+        _operation: &str,
+        _args: Value,
+        _context: Value,
+        _cancel: CancellationToken,
+    ) -> CoreResult<Value> {
+        Err(CoreError::new("BACKEND_UNSUPPORTED", "宿主未提供后端服务"))
+    }
+    async fn host_action(
+        &self,
+        _kind: &str,
+        _args: Value,
+        _context: Value,
+        _cancel: CancellationToken,
+    ) -> CoreResult<Value> {
+        Err(CoreError::new(
+            "HOST_ACTION_UNSUPPORTED",
+            "宿主未提供窗口或文件服务",
+        ))
+    }
     async fn open_connection(&self, id: &str) -> CoreResult<()>;
     async fn close_connection(&self, id: &str) -> CoreResult<()>;
     /// Once a transaction starts, the implementation must drain its response even if cancelled.
@@ -94,12 +116,16 @@ pub struct RuntimeSnapshot {
     pub connections: BTreeMap<String, Value>,
     pub flows: BTreeMap<String, Value>,
     pub ui: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub window_ui: BTreeMap<String, BTreeMap<String, Value>>,
+    #[serde(default)]
+    pub backends: BTreeMap<String, Value>,
     pub logs: Vec<RuntimeEvent>,
 }
 
 struct FlowState {
     enabled: bool,
-    running: Option<(String, CancellationToken)>,
+    running: BTreeMap<String, (String, CancellationToken)>,
     trigger_cancel: CancellationToken,
     auto_times: VecDeque<Instant>,
     auto_paused: bool,
@@ -114,6 +140,9 @@ struct State {
     points: BTreeMap<String, Value>,
     connections: BTreeMap<String, Value>,
     ui: BTreeMap<String, Value>,
+    window_ui: BTreeMap<String, BTreeMap<String, Value>>,
+    backends: BTreeMap<String, Value>,
+    backend_cursors: BTreeMap<String, (u64, u64)>,
     flows: HashMap<String, FlowState>,
     logs: VecDeque<RuntimeEvent>,
     run_revisions: HashMap<String, u64>,
@@ -162,6 +191,9 @@ impl Runtime {
             points: BTreeMap::new(),
             connections: BTreeMap::new(),
             ui: BTreeMap::new(),
+            window_ui: BTreeMap::new(),
+            backends: BTreeMap::new(),
+            backend_cursors: BTreeMap::new(),
             logs: VecDeque::new(),
             run_revisions: HashMap::new(),
             run_tokens: HashMap::new(),
@@ -174,7 +206,7 @@ impl Runtime {
                         f.id.clone(),
                         FlowState {
                             enabled: false,
-                            running: None,
+                            running: BTreeMap::new(),
                             trigger_cancel: CancellationToken::new(),
                             auto_times: VecDeque::new(),
                             auto_paused: false,
@@ -239,6 +271,32 @@ impl Runtime {
                 .map(|widget| widget.id.clone())
                 .collect();
             state.inputs.retain(|id, _| compatible_inputs.contains(id));
+            state
+                .backends
+                .retain(|id, _| next.backends.iter().any(|backend| &backend.id == id));
+            state
+                .backend_cursors
+                .retain(|id, _| next.backends.iter().any(|backend| &backend.id == id));
+            for overrides in state.window_ui.values_mut() {
+                overrides.retain(|key, _| {
+                    let Some((id, property)) = key.split_once('.') else {
+                        return false;
+                    };
+                    next.pages
+                        .iter()
+                        .flat_map(|page| &page.widgets)
+                        .any(|widget| {
+                            widget.id == id
+                                && !widget.bindings.contains_key(property)
+                                && !widget
+                                    .custom_properties
+                                    .get(property)
+                                    .is_some_and(|custom| custom.binding.is_some())
+                                && (widget.props.contains_key(property)
+                                    || widget.custom_properties.contains_key(property))
+                        })
+                });
+            }
             state.ui.retain(|key, _| {
                 let Some((widget_id, property)) = key.split_once('.') else {
                     return false;
@@ -302,7 +360,7 @@ impl Runtime {
                         flow.id.clone(),
                         FlowState {
                             enabled,
-                            running: old.and_then(|value| value.running.clone()),
+                            running: old.map(|value| value.running.clone()).unwrap_or_default(),
                             trigger_cancel,
                             auto_times: old
                                 .map(|value| value.auto_times.clone())
@@ -339,6 +397,87 @@ impl Runtime {
         self.state.lock().unwrap().inputs.insert(id, value);
     }
 
+    fn ui_property(&self, scope: &str, key: &str) -> Option<Value> {
+        let state = self.state.lock().unwrap();
+        state
+            .window_ui
+            .get(scope)
+            .and_then(|values| values.get(key))
+            .or_else(|| state.ui.get(key))
+            .cloned()
+    }
+
+    pub fn clear_window(&self, window_instance_id: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.window_ui.remove(window_instance_id);
+        for flow in state.flows.values_mut() {
+            if let Some((_, token)) = flow.running.remove(window_instance_id) {
+                token.cancel();
+            }
+        }
+    }
+
+    /// Call only after the old provider has stopped, before accepting a replacement generation.
+    pub fn reset_backend(&self, id: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.backends.remove(id);
+        state.backend_cursors.remove(id);
+    }
+
+    pub fn update_backend(self: &Arc<Self>, event: crate::backend::BackendEvent) {
+        let project = self.project();
+        if !project
+            .backends
+            .iter()
+            .any(|backend| backend.id == event.backend_id)
+        {
+            return;
+        }
+        {
+            let mut state = self.state.lock().unwrap();
+            if let Some((generation, sequence)) = state.backend_cursors.get(&event.backend_id) {
+                if *generation != event.generation || *sequence >= event.sequence {
+                    return;
+                }
+            }
+            state
+                .backend_cursors
+                .insert(event.backend_id.clone(), (event.generation, event.sequence));
+            if event.kind == "snapshot" {
+                state
+                    .backends
+                    .insert(event.backend_id.clone(), event.data.clone());
+            }
+        }
+        self.publish_event(RuntimeEvent::new(
+            "backend.event",
+            serde_json::to_value(&event).unwrap_or(Value::Null),
+        ));
+        let message = json!({"payload":event.data,"context":{"deviceKey":event.device_key,"jobId":event.job_id,"backendId":event.backend_id}});
+        for flow in &project.flows {
+            for node in &flow.nodes {
+                if node.kind == "trigger.backend"
+                    && node.config.get("backendId").and_then(Value::as_str)
+                        == Some(event.backend_id.as_str())
+                    && node
+                        .config
+                        .get("event")
+                        .and_then(Value::as_str)
+                        .map_or(true, |kind| kind == event.kind)
+                {
+                    let _ = self.trigger_internal(
+                        &flow.id,
+                        Some(&node.id),
+                        message.clone(),
+                        json!({}),
+                        true,
+                        true,
+                    );
+                }
+            }
+        }
+    }
+
     pub fn active_run_count(&self) -> usize {
         self.active_runs.load(Ordering::Acquire)
     }
@@ -362,9 +501,10 @@ impl Runtime {
         let state = self.state.lock().unwrap();
         RuntimeSnapshot {
             variables: state.variables.clone(), inputs: state.inputs.clone(), points: state.points.clone(), connections: state.connections.clone(), ui: state.ui.clone(),
+            window_ui: state.window_ui.clone(), backends: state.backends.clone(),
             flows: state.flows.iter().map(|(id,f)|(id.clone(),json!({
-                "enabled": f.enabled, "busy": f.running.is_some(), "autoPaused": f.auto_paused,
-                "dropped": f.dropped, "runId": f.running.as_ref().map(|(id,_)|id),
+                "enabled": f.enabled, "busy": !f.running.is_empty(), "autoPaused": f.auto_paused,
+                "dropped": f.dropped, "runId": f.running.values().next().map(|(id,_)|id),
             }))).collect(),
             logs: state.logs.iter().cloned().collect(),
         }
@@ -383,9 +523,15 @@ impl Runtime {
                         .unwrap_or_else(|| self.project_revision.load(Ordering::Acquire)),
                 );
             }
-            state.logs.push_back(event.clone());
-            while state.logs.len() > 500 {
-                state.logs.pop_front();
+            // Full backend snapshots already live in state.backends. Keeping each
+            // revision in the runtime log would multiply the provider's own log history.
+            if !(event.kind == "backend.event"
+                && event.data.get("kind").and_then(Value::as_str) == Some("snapshot"))
+            {
+                state.logs.push_back(event.clone());
+                while state.logs.len() > 500 {
+                    state.logs.pop_front();
+                }
             }
         }
         let _ = self.events.send(event);
@@ -527,7 +673,7 @@ impl Runtime {
             let f = state.flows.get_mut(id).unwrap();
             f.enabled = false;
             f.trigger_cancel.cancel();
-            if let Some((_, token)) = f.running.take() {
+            for (_, (_, token)) in std::mem::take(&mut f.running) {
                 token.cancel();
             }
         }
@@ -574,7 +720,8 @@ impl Runtime {
         if !inputs.is_object() {
             return Err(CoreError::new("INPUTS", "控件输入快照必须为对象"));
         }
-        let inputs = if prefer_runtime_inputs {
+        let scope = window_scope(&message).to_owned();
+        let inputs = if prefer_runtime_inputs && scope.is_empty() {
             let state = self.state.lock().unwrap();
             let mut merged = state.inputs.clone();
             for (key, value) in inputs.as_object().unwrap() {
@@ -660,11 +807,12 @@ impl Runtime {
                 Ok(())
             }
             .and_then(|()| {
-                if f.running.is_some() {
+                if f.running.contains_key(&scope) {
                     f.dropped += 1;
                     Err(CoreError::new("FLOW_BUSY", "流程正在执行"))
                 } else {
-                    f.running = Some((run_id.clone(), cancel.clone()));
+                    f.running
+                        .insert(scope.clone(), (run_id.clone(), cancel.clone()));
                     self.active_runs.fetch_add(1, Ordering::AcqRel);
                     Ok(())
                 }
@@ -714,15 +862,21 @@ impl Runtime {
                 let mut state = runtime.state.lock().unwrap();
                 if let Some(f) = state.flows.get_mut(&flow.id) {
                     if f.running
-                        .as_ref()
+                        .get(&scope)
                         .is_some_and(|(current, _)| current == &id)
                     {
-                        f.running = None;
+                        f.running.remove(&scope);
                     }
                 }
             }
             match outcome {
-                Ok(()) => runtime.emit("run.completed", Some(&flow.id), Some(&id), None, json!({})),
+                Ok(()) => runtime.emit(
+                    "run.completed",
+                    Some(&flow.id),
+                    Some(&id),
+                    None,
+                    json!({"windowInstanceId":scope}),
+                ),
                 Err(e) => runtime.emit(
                     if e.code == "CANCELLED" {
                         "run.cancelled"
@@ -732,7 +886,7 @@ impl Runtime {
                     Some(&flow.id),
                     Some(&id),
                     None,
-                    json!({"error":e}),
+                    json!({"error":e,"windowInstanceId":scope}),
                 ),
             }
             let mut state = runtime.state.lock().unwrap();
@@ -902,7 +1056,7 @@ impl Runtime {
                         Some(&flow.id),
                         Some(run_id),
                         Some(&id),
-                        json!({"error":error,"step":steps}),
+                        json!({"error":error,"step":steps,"windowInstanceId":window_scope(&msg)}),
                     );
                     if ["CANCELLED", "MESSAGE_LIMIT", "QUEUE_LIMIT", "STEP_LIMIT"]
                         .contains(&error.code.as_str())
@@ -963,6 +1117,18 @@ impl Runtime {
         let result = match reference {
             ValueRef::Literal { value } => Some(value.clone()),
             ValueRef::Message { path } => get_path(message, path).cloned(),
+            ValueRef::Context { path } => message
+                .get("context")
+                .and_then(|value| get_path(value, path))
+                .cloned(),
+            ValueRef::Backend { key, path } => self
+                .state
+                .lock()
+                .unwrap()
+                .backends
+                .get(key)
+                .and_then(|value| get_context_path(value, path, &message["context"]))
+                .cloned(),
             ValueRef::Input { key } => inputs.get(key).cloned(),
             ValueRef::Variable { key } => self.state.lock().unwrap().variables.get(key).cloned(),
             ValueRef::Point { key } => self
@@ -990,13 +1156,8 @@ impl Runtime {
                     .or_else(|| widget.bindings.get(property));
                 let resolved = if let Some(binding) = binding {
                     self.resolve_inner(project, binding, message, inputs, properties)
-                } else if let Some(current) = self
-                    .state
-                    .lock()
-                    .unwrap()
-                    .ui
-                    .get(&format!("{key}.{property}"))
-                    .cloned()
+                } else if let Some(current) =
+                    self.ui_property(window_scope(message), &format!("{key}.{property}"))
                 {
                     Ok(current)
                 } else {
@@ -1056,10 +1217,14 @@ impl Runtime {
                 if old == new || new.is_none() || origin_flow_id == Some(action.flow_id.as_str()) {
                     continue;
                 }
-                let event_message = json!({"payload":{"widgetId":widget.id,"property":property_name,"oldValue":old,"value":new}});
+                let event_message = json!({"context":message.get("context").cloned().unwrap_or(json!({})),"payload":{"widgetId":widget.id,"property":property_name,"oldValue":old,"value":new}});
                 let latest_inputs = {
                     let state = self.state.lock().unwrap();
-                    let mut merged = state.inputs.clone();
+                    let mut merged = if window_scope(message).is_empty() {
+                        state.inputs.clone()
+                    } else {
+                        BTreeMap::new()
+                    };
                     if let Some(values) = inputs.as_object() {
                         for (id, value) in values {
                             merged.entry(id.clone()).or_insert_with(|| value.clone());
@@ -1141,6 +1306,23 @@ impl Runtime {
                 }
                 message["payload"] = self.host.command_with_origin(text("connectionId"),text("command"),Value::Object(params),cancel,flow_id).await?;
             }
+            "backend.invoke" | "window.open" | "window.close" | "window.focus" | "file.open" | "file.save" => {
+                let mut args = Map::new();
+                if let Some(config) = node.config.get("args").and_then(Value::as_object) {
+                    for (key, value) in config { args.insert(key.clone(), self.resolve(project, &serde_json::from_value(value.clone())?, message, inputs)?); }
+                }
+                if node.kind.starts_with("window.") {
+                    if let Some(window_id) = node.config.get("windowId").and_then(Value::as_str) {
+                        args.entry("windowId".to_owned()).or_insert_with(|| json!(window_id));
+                    }
+                }
+                let context = message.get("context").cloned().unwrap_or(json!({}));
+                message["payload"] = if node.kind == "backend.invoke" {
+                    self.host.backend_invoke(text("backendId"), text("operation"), Value::Object(args), context, cancel).await?
+                } else {
+                    self.host.host_action(&node.kind, Value::Object(args), context, cancel).await?
+                };
+            }
             "condition" => return Ok(Some(if compare(&reference("left")?,text("operator"),&reference("right")?)? {"true"} else {"false"}.into())),
             "assign" => { let value = reference("value")?; set_path(message,text("path"),value)?; }
             "variable.get" => {
@@ -1193,8 +1375,13 @@ impl Runtime {
                 let previous = self.resolve(project, &ValueRef::Property { key: widget_id.into(), property: property.into() }, message, inputs).ok();
                 if previous.as_ref() == Some(&value) { return Ok(Some("out".into())); }
                 let before_properties = self.capture_custom_property_values(project, message, inputs);
-                self.state.lock().unwrap().ui.insert(key.clone(), value.clone());
-                self.emit("ui.property.changed",Some(flow_id),Some(run_id),Some(&node.id),json!({"widgetId":widget_id,"property":property,"value":value}));
+                let scope = window_scope(message);
+                {
+                    let mut state = self.state.lock().unwrap();
+                    if scope.is_empty() { state.ui.insert(key.clone(), value.clone()); }
+                    else { state.window_ui.entry(scope.into()).or_default().insert(key.clone(), value.clone()); }
+                }
+                self.emit("ui.property.changed",Some(flow_id),Some(run_id),Some(&node.id),json!({"widgetId":widget_id,"property":property,"value":value,"windowInstanceId":scope}));
                 self.fire_custom_property_events(project, before_properties, message, inputs, Some(flow_id)).await;
             }
             "delay" => tokio::time::sleep(Duration::from_millis(number("durationMs",0))).await,
@@ -1205,7 +1392,7 @@ impl Runtime {
             "page.navigate" => {
                 let current = self.project();
                 if std::ptr::eq(project, current.as_ref()) {
-                    self.emit("page.changed",Some(flow_id),Some(run_id),Some(&node.id),json!({"pageId":text("pageId")}));
+                    self.emit("page.changed",Some(flow_id),Some(run_id),Some(&node.id),json!({"pageId":text("pageId"),"windowInstanceId":window_scope(message)}));
                 }
             }
             "log" => self.emit("log",Some(flow_id),Some(run_id),Some(&node.id),json!({"level":node.config.get("level").and_then(Value::as_str).unwrap_or("info"),"value":reference("value")?})),
@@ -1227,6 +1414,35 @@ pub fn check_message(message: &Value) -> CoreResult<()> {
 
 pub fn get_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(value, |v, part| v.get(part))
+}
+
+fn window_scope(message: &Value) -> &str {
+    message
+        .get("context")
+        .and_then(|context| context.get("windowInstanceId"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+/// Context substitutions are single object keys, including dots or Windows path separators.
+pub fn get_context_path<'a>(value: &'a Value, path: &str, context: &Value) -> Option<&'a Value> {
+    if !crate::valid_backend_path(path) {
+        return None;
+    }
+    path.split('.').try_fold(value, |value, segment| {
+        let key = match segment.strip_prefix('$') {
+            Some(name) => context.get(name)?.as_str()?,
+            None => segment,
+        };
+        if ["__proto__", "prototype", "constructor"].contains(&key) {
+            return None;
+        }
+        if value.is_array() {
+            key.parse::<usize>().ok().and_then(|index| value.get(index))
+        } else {
+            value.get(key)
+        }
+    })
 }
 
 pub fn set_path(value: &mut Value, path: &str, replacement: Value) -> CoreResult<()> {

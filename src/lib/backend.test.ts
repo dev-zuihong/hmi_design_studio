@@ -71,6 +71,82 @@ beforeEach(() => {
 })
 
 describe('preview runtime window synchronization', () => {
+  it('retains uncommitted device ID edits but discards local overrides when the bound backend value changes', async () => {
+    const fixture = project()
+    fixture.pages[0]!.widgets[0]!.bindings.value = { source: 'backend', key: 'ptb', path: 'byDevice.$deviceKey.deviceId' }
+    fixture.pages[0]!.widgets[1]!.bindings.value = { source: 'backend', key: 'ptb', path: 'byDevice.$deviceKey.draft.tvccVoltage' }
+    let state = { ...snapshot('original'), backends: { ptb: { byDevice: { sim_1: { deviceId: 1, draft: { tvccVoltage: 3.3 } } } } } }
+    mocks.invoke.mockImplementation(async (command: string) => command === 'get_runtime_window_state' ? {
+      instance: { context: { windowInstanceId: 'window_sim_1', deviceKey: 'sim_1' }, pageId: 'page-a', windowId: 'settings', inputs: { 'input-a': 9, 'select-a': 2.4 } }, project: fixture, snapshot: state, generation: 4, revision: 1,
+    } : command === 'runtime_snapshot' ? state : undefined)
+    const runtime = useRuntime({ runtimeWindow: true })
+    await runtime.connectWindow()
+    await runtime.updateInput('input-a', 9)
+    await runtime.updateInput('select-a', 2.4)
+    await runtime.refresh()
+    expect(runtime.inputs.value).toMatchObject({ 'input-a': 9, 'select-a': 2.4 })
+    state = { ...snapshot('imported'), backends: { ptb: { byDevice: { sim_1: { deviceId: 1, draft: { tvccVoltage: 2.9 } } } } } }
+    await runtime.refresh()
+    expect(runtime.inputs.value['input-a']).toBe(9)
+    expect(runtime.inputs.value).not.toHaveProperty('select-a')
+    // Rehydrating a window must not resurrect the server's older input overlay.
+    await runtime.connectWindow()
+    expect(runtime.inputs.value).not.toHaveProperty('select-a')
+    await runtime.act({ kind: 'flow', flowId: 'save' })
+    expect(mocks.invoke).toHaveBeenCalledWith('trigger_flow', expect.objectContaining({ inputs: { 'input-a': 9, 'select-a': 2.9 } }))
+    runtime.dispose()
+  })
+  it('hot updates a device window without hydrating main inputs or losing edits made during the update', async () => {
+    const initialProject = project()
+    initialProject.windows = [{ id: 'settings', pageId: 'page-a', title: 'Settings', width: 640, height: 480 }]
+    const instance = { context: { windowInstanceId: 'window_sim_1', deviceKey: 'sim_1', backendId: 'ptb' }, pageId: 'page-a', windowId: 'settings', inputs: { 'input-a': 'device draft' } }
+    const initialState = { instance, project: initialProject, snapshot: { ...snapshot('initial'), inputs: { 'input-a': 'main input' } }, generation: 4, revision: 1 }
+    const pending = deferred<typeof initialState>()
+    let requests = 0
+    mocks.invoke.mockImplementation((command: string) => command === 'get_runtime_window_state'
+      ? ++requests === 1 ? Promise.resolve(initialState) : pending.promise
+      : Promise.resolve(undefined))
+    const runtime = useRuntime({ runtimeWindow: true })
+    await runtime.connectWindow()
+    expect(runtime.inputs.value['input-a']).toBe('device draft')
+
+    fire('preview-input-changed', { generation: 4, id: 'input-a', value: 'another window' })
+    fire('preview-state-changed', { running: true, generation: 4, revision: 2 })
+    await vi.waitFor(() => expect(requests).toBe(2))
+    await runtime.updateInput('input-a', 'typed during update')
+    const nextProject = structuredClone(initialProject)
+    nextProject.name = 'Updated device UI'
+    nextProject.windows![0]!.width = 900
+    pending.resolve({ ...initialState, project: nextProject, snapshot: { ...snapshot('updated'), inputs: { 'input-a': 'unrelated main input' } }, revision: 2 })
+    await vi.waitFor(() => expect(runtime.previewProject.value?.name).toBe('Updated device UI'))
+    expect(runtime.windowSize.value).toEqual({ width: 900, height: 480 })
+    expect(runtime.snapshot.value.variables.version).toBe('updated')
+    expect(runtime.context.value).toEqual(instance.context)
+    expect(runtime.inputs.value['input-a']).toBe('typed during update')
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'get_preview_state')).toBe(false)
+    fire('preview-state-changed', { running: true, generation: 4, revision: 1 })
+    expect(requests).toBe(2)
+    runtime.dispose()
+    expect(mocks.unlisteners.get('preview-state-changed')?.[0]).toHaveBeenCalledOnce()
+  })
+  it('keeps device-window drafts and action contexts isolated without starting another session', async () => {
+    let deviceKey='sim_1'
+    mocks.invoke.mockImplementation(async(command:string)=> command==='get_runtime_window_state'?{
+      instance:{context:{windowInstanceId:`window_${deviceKey}`,deviceKey,backendId:'ptb'},pageId:'page-a',windowId:'settings',inputs:{}},
+      project:project(),snapshot:snapshot('window'),revision:1,
+    }:command==='runtime_snapshot'?snapshot('window'):undefined)
+    const first=useRuntime({runtimeWindow:true});await first.connectWindow()
+    deviceKey='sim_2'
+    const second=useRuntime({runtimeWindow:true});await second.connectWindow()
+    await first.updateInput('input-a','device one')
+    expect(second.inputs.value['input-a']).toBeUndefined()
+    await first.act({kind:'flow',flowId:'edit',entryNodeId:'start'},42)
+    expect(mocks.invoke).toHaveBeenCalledWith('trigger_flow',expect.objectContaining({message:{payload:42,context:{windowInstanceId:'window_sim_1',deviceKey:'sim_1',backendId:'ptb'}},inputs:{'input-a':'device one'}}))
+    expect(mocks.invoke.mock.calls.some(([command])=>command==='start_preview'||command==='update_preview_input')).toBe(false)
+    fire('runtime-event',{kind:'page.changed',data:{pageId:'page-b',windowInstanceId:'window_sim_1'},timestamp:1})
+    expect(first.currentPage.value).toBe('page-b');expect(second.currentPage.value).toBe('page-a')
+    first.dispose();second.dispose()
+  })
   it('attaches to the active preview and hydrates its page, history, snapshot, and bound inputs', async () => {
     const state = previewState(7, 'page-b', 'saved')
     mocks.invoke.mockImplementation(async (command: string) => command === 'get_preview_state' ? state : command === 'runtime_snapshot' ? state.snapshot : undefined)

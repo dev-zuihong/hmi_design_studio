@@ -300,3 +300,59 @@ WebKit 曾在保存后的资源缺失提示改变画布尺寸时报告两处 Res
 ### 未覆盖范围
 
 本轮原生检查限定为开发启动、双窗布局和偏好/工程隔离，不代替原生设备、Python 或 Runner 执行验收。`scripts/test-native.mjs` 仅同步了布局定位，未重新运行其完整设备测试。Rust、Python 执行核心未修改，本轮未重跑其测试；WebKit、真实串口、Windows 10、不同 DPI、干净机器和其他平台验收仍待相应环境。早期针对既有进程的只读窗口截图未取得有效画面，不计作验证；最终原生结果来自上述独立启动。
+
+## CHG-0015：PTB Demo 与设备组件（2026-10-16）
+
+本轮在 Windows 11 x64 执行，应用 0.3.0、方案 v1.0、项目 schema 3。参考 `ING_PTB/07-gui` 只读；所提取源码及摘要记录于 `backends/ing-ptb/source-provenance.json`。演示工程由生成脚本产生，包含 2 页、147 个可编辑控件、53 个流程、1 个设备窗口模板和 1 个明确为 simulation 的后端实例。
+
+### 自动化与协议
+
+| 检查 | 实际结果 |
+| --- | --- |
+| `npm run build` | TypeScript 检查与 Studio/Runner Vite 生产构建通过；Studio 仍有既有大 chunk 提示 |
+| `npm test` | 最终全部 59 项通过，包含独立设备窗口状态、草稿/上下文、热更新隔离，以及绑定变化清除过期输入而保留未提交设备 ID |
+| `npm run test:e2e` | 最终完整 Chromium 56 项通过；新增设备控件及既有 Gallery 共 10 项在 WebKit 通过，包含真实样式下的小控件可见性与数值选项类型 |
+| `cargo test --workspace` | 89 项通过、3 项默认忽略；其中 40 项 core、33 项 desktop、8 项 Python，其余为示例协议与 headless 测试 |
+| 后端工程包 ignored 专项 | 设置 `HMI_BACKEND_PACKAGE_IN/OUT` 后显式执行 `verify_backend_package_interop_when_requested -- --ignored`，1 项通过；另外实际依赖工程包、numpy/requests 专项未运行 |
+| `dotnet run --project backends/ing-ptb/tests/IngPtb.Backend.Tests.csproj -c Release` | 66 项断言通过，覆盖 C1–C7/CRC、分片/取消/结果未知隔离、配置 v2/v3/v4、滚码边界、日志预算和重复 C2 结果不重复计数 |
+| `backends/ing-ptb/build.ps1` | .NET 10 Windows x64 NativeAOT 发布成功，0 警告、0 错误；目标无需 .NET |
+| `node backends/ing-ptb/tests/rpc-smoke.mjs .../ing-ptb-backend.exe` | 实际原生进程 RPC 通过：三设备自动握手、20 个快照、设置/任务/导出、非法路径/操作拒绝及退出 |
+| 温度示例 CLI smoke | 既有 `resources/example/project.json` 使用 `sim://temperature` 通过，结果 23.6°C |
+
+会话回归使用实际子进程 fixture，验证初始快照可用、相同资源内容复制保持 provider、失败切换恢复旧模型与连接并释放屏障、独立工程资源根和动态文件快照保留、已受理后台任务阻止资源切换而停止会话可打断等待、资源字节变化及 provider 崩溃恢复。文件测试验证不可变快照、配置附件往返、缺文件报告、同名冲突拒绝和路径越界拒绝；窗口测试覆盖需复位状态保留、拔出、代次变化和 provider 失败。
+
+### 集成发现与修正
+
+- 首轮原生脚本未复制固定 WebView2，端点未启动；随后补齐真实运行资源。旧构建对清单缺省 modes 的校验不一致，修正统一清单加载并在 PTB 清单明确列出 simulation/usb。
+- 初轮桌面新增测试的无后端 fixture 仍保留后端绑定、Windows canonical 路径前缀断言不一致；修正 fixture 和规范化比较后全部通过。
+- 真机 WebView2 前七阶段通过，但主窗关闭后子窗阻止 Runner 退出；改为主窗先停止会话、关闭设备子窗再销毁主窗。每窗 favicon 请求 500 确认为缺少资源，已补本地图标。
+- 截图发现通用 scroll 容器误显示未知类型、较小统计卡片/按钮裁剪和数值下拉未显示选中值；按共享组件修复并增加实际样式可见性检查。地址统一为 uint32 十进制或带 `0x` 的十六进制，表格地址单元格使用同一校验。
+- 试跑时本仓库无命名的 Playwright `chromium` project，也无 `test:unit` npm 脚本；改用默认 Chromium 配置、`--browser=webkit` 专项和现有 `npm test`，上述结果均来自修正后的实际命令。
+- 首次源码 ZIP 打包在 PowerShell 5 缺少显式加载的 `System.IO.Compression`，补齐程序集后完整构建脚本重跑成功。最终截图还检出只有颜色配置的徽标丢失默认文本；修正通用回退并通过对应表格回归，随后重建并重新导出运行包。
+
+### 最终交付与工程包互通
+
+最终构建命令为 `cargo build --workspace --release --target x86_64-pc-windows-msvc --features hmi-studio/custom-protocol,hmi-runner/custom-protocol`。随后执行 `scripts/build-ptb-demo.ps1 -SkipBuild -OutputDirectory artifacts/ing-ptb-final`，复用本轮刚构建的产物；脚本重新暂存 Runner 模板并生成、校验、模拟运行和导出。
+
+| 产物 | 内容 |
+| --- | --- |
+| `artifacts/ing-ptb-final/ING-PTB.hmiproj` | 完整可编辑工程、后端与示例素材，1,892,057 字节，依赖无缺失 |
+| `artifacts/ing-ptb-final/ING-PTB-win-x64.zip` | Runner、NativeAOT 后端和固定 WebView2，329,126,386 字节，269 个文件，无 Python |
+| `artifacts/ing-ptb-final/ing-ptb-backend-source.zip` | 31 个后端源码/配置/测试/构建文件，与当前源码逐字节核对通过 |
+| `artifacts/ing-ptb-final/runtime/` | 经完整文件集合与 SHA-256 校验保留的解压目录 |
+
+运行包 SHA-256：`b3170ecc00fb8953c1eb05e28764cce23d02694b92e2799c34abac0c66bacbe1`。提供程序 EXE SHA-256：`07a3f13b3bc443c85341f17ec6988eda4fdbc3113dafaa79c461f24490471fb8`。包内 Runner 和后端与最终构建逐字节一致。
+
+执行 `python scripts/verify-package.py artifacts/ing-ptb-final/ING-PTB-win-x64.zip --directory artifacts/ing-ptb-final/runtime --python absent --cli target/x86_64-pc-windows-msvc/release/hmi-cli.exe --flow flow_scan --report artifacts/ing-ptb-final/package-verification.json` 成功：文件清单、全部摘要、Python 按需排除及仅 Windows 系统 PATH 的包内模拟流程通过。报告为该目录中的 `validate.json`、`smoke.json`、`package.json`、`export.json`、`package-verification.json` 和 `source-verification.json`。
+
+工程包经真实 `BrowserProjectPackage.open/save`、Rust `read_package/write_package` 再到浏览器打开保存，最终整个项目模型一致，7 个后端/素材文件字节一致；报告为 `artifacts/ing-ptb-final/package-interop.json`。这些构建产物和本机测试报告位于忽略目录，不纳入源码提交。
+
+### 原生与交付验收边界
+
+使用 `node scripts/test-native-ptb.mjs --exe artifacts/ing-ptb-final/runtime/HmiRunner.exe --project artifacts/ing-ptb-final/runtime/project.json --resources artifacts/ing-ptb-final/runtime --output artifacts/native-ptb-package-final --port 9345` 实测最终解压包：9 个阶段全部通过，WebView2 错误 0，主窗正常关闭退出码 0，无强制清理。覆盖三设备、两个独立设置窗口及同设备复用、TVCC/次数草稿隔离、六页签、固件快照不随源文件变化、配置伴随资源、模拟 C3 下发和 C1/C2 完成、停止关窗及 provider 退出、停止时模式设置保存并恢复 simulation、重启及主窗关闭全进程收尾。启动子进程 PATH 仅含 Windows 系统目录，Python/.NET 环境路径指向不存在的位置；测试宿主自身使用开发工具，不等同干净机器验收。
+
+最终报告 `artifacts/native-ptb-package-final/report.json`，截图 `main.png`、`main-completed.png`、`settings-firmware.png`、`settings-second-device.png` 已逐张检查：统计数字、按钮文字、下拉选值、滚动区、中文状态徽标正常，未出现未知控件占位。窗口及任务均使用模拟设备；USB 模式只在停止状态下测试设置保存，启动前恢复并断言 simulation。
+
+原生脚本使用真实 WebView2、Rust 会话与 NativeAOT 后端，在独立测试工程中固定 simulation，禁止运行真实 USB。文件选择对话框由同一宿主文件导入命令代替，以便自动化选择确定文件；真实选择器仍需人工交互验收。模拟测试不代表真实 USB Printer/ZLP、硬件固件 C1–C7、实际烧录、热插拔驱动行为、Windows 10、干净机器、长期运行或不同 DPI 已通过。
+
+当前 USB 热插拔采用 650 ms 枚举轮询，未接入 WM_DEVICECHANGE。多连续段 HEX/IHX 可下发，但原 GUI 配置重载有局限，导出这类 `.ptbcfg` 会明确拒绝并要求分段 BIN。`rfTesting` 统计为 0，因为当前协议没有单独 RF 阶段通知。本轮没有 macOS PTB 后端构建或平台验收。

@@ -2,7 +2,9 @@ mod export;
 mod preview_host;
 mod project_package;
 mod resources;
+mod runtime_files;
 mod runtime_log;
+mod runtime_windows;
 mod session;
 mod startup;
 pub mod tooling;
@@ -31,6 +33,7 @@ pub enum AppMode {
 }
 pub struct DesktopState {
     mode: AppMode,
+    runtime_windows: runtime_windows::RuntimeWindows,
     resources: Resources,
     project_path: Mutex<Option<PathBuf>>,
     current_project: Mutex<Option<Project>>,
@@ -329,6 +332,41 @@ async fn import_python_runtime(path: String, state: State<'_, DesktopState>) -> 
     )
 }
 #[tauri::command]
+async fn import_backend(path: String, state: State<'_, DesktopState>) -> Result<Value> {
+    state.studio()?;
+    let _transition = state.transition.lock().await;
+    let path = PathBuf::from(path);
+    let directory = if path.is_file() {
+        path.parent().ok_or("无效后端路径")?.to_path_buf()
+    } else {
+        path
+    };
+    session::check_backend(&directory)?;
+    let manifest = read_json(&directory.join("manifest.json"))?;
+    let id = manifest["id"].as_str().ok_or("后端缺少 ID")?;
+    if !hmi_core::safe_identifier(id) {
+        return Err("后端 ID 无效".into());
+    }
+    let target = manifest["target"].as_str().ok_or("后端缺少目标平台")?;
+    for root in [state.resources.root.clone(), state.workspace.root()] {
+        let destination = root.join("backends").join(target).join(id);
+        if destination.exists() {
+            let current = read_json(&destination.join("manifest.json"))?;
+            if current != manifest {
+                return Err("同 ID 已存在不同版本后端，请使用新的资源 ID".into());
+            }
+            continue;
+        }
+        let parent = destination.parent().ok_or("后端路径无效")?;
+        std::fs::create_dir_all(parent).map_err(error)?;
+        let stage = tempfile::tempdir_in(parent).map_err(error)?;
+        copy_tree(&directory, stage.path())?;
+        session::check_backend(stage.path())?;
+        std::fs::rename(stage.path(), &destination).map_err(error)?;
+    }
+    Ok(manifest)
+}
+#[tauri::command]
 async fn import_python_dependencies(path: String, state: State<'_, DesktopState>) -> Result<Value> {
     import_python(path, &state, true).await?;
     let project = state.workspace.snapshot().await;
@@ -576,6 +614,7 @@ async fn start_runtime_session(
 ) -> Result<Arc<session::Session>> {
     let log_directory = session::user_directory(&project.id)?;
     let runtime = session::Session::new(project.clone(), state.resources.clone()).await?;
+    runtime_files::attach(app, &runtime).await;
     let mut events = runtime.runtime.subscribe();
     let cancel = runtime.cancel.clone();
     let page = state.preview_page.clone();
@@ -654,6 +693,20 @@ async fn forward_runtime_event(
         payload.insert("generation".into(), json!(generation));
     }
     let _ = app.emit("runtime-event", payload);
+    if event.kind == "backend.event" && event.data["kind"] == "snapshot" {
+        if preview_generation.load(Ordering::Acquire) == generation {
+            let state = app.state::<DesktopState>();
+            state
+                .runtime_windows
+                .reconcile_devices(
+                    app,
+                    event.data["backendId"].as_str().unwrap_or(""),
+                    &event.data["data"],
+                )
+                .await;
+        }
+        return;
+    }
     let failure = match log {
         Ok(log) => log.write(event).await.err().map(|e| e.to_string()),
         Err(error) => Some(error.to_string()),
@@ -794,9 +847,11 @@ async fn apply_preview_revision(
         }
         return Ok(json!({"status":"invalid","revision":revision,"issues":issues}));
     }
-    let resource_barrier = active.requires_resource_barrier(&project);
+    let resource_barrier = active
+        .requires_resource_barrier_with_resources(&project, &resources)
+        .await?;
     let had_pending = state.pending_preview_update.lock().await.is_some();
-    if resource_barrier && active.runtime.active_run_count() > 0 {
+    if resource_barrier && active.resource_busy().await {
         active.runtime.begin_revision_barrier();
         *state.pending_preview_update.lock().await = Some((revision, project, Some(resources)));
         *state.preview_update_status.lock().await = "waiting".into();
@@ -816,7 +871,7 @@ async fn apply_preview_revision(
                     };
                     tokio::select! {
                         _ = cancel.cancelled() => break,
-                        _ = active.runtime.wait_for_runs() => {}
+                        _ = active.wait_for_resource_idle() => {}
                     }
                     if cancel.is_cancelled() {
                         break;
@@ -887,6 +942,7 @@ async fn apply_preview_revision_now_locked(
     active
         .apply_revision(project.clone(), resources.clone())
         .await?;
+    state.runtime_windows.reconcile_project(app, &project).await;
     state.preview_revision.store(revision, Ordering::Release);
     *state.current_project.lock().await = Some(project.clone());
     *state.preview_project.lock().await = Some(project.clone());
@@ -1036,6 +1092,7 @@ async fn stop_session_locked(
     app: &tauri::AppHandle,
     state: &DesktopState,
 ) -> (Option<tauri::WebviewWindow>, Option<u64>) {
+    state.runtime_windows.close_all(app).await;
     state.preview_update_cancel.lock().await.cancel();
     state.pending_preview_update.lock().await.take();
     state.preview_update_worker.store(false, Ordering::Release);
@@ -1147,7 +1204,6 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                         let _ = window_settings::save(&webview, &project.id);
                     }
                 }
-                return;
             }
             let session_active = state
                 .session
@@ -1160,7 +1216,8 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 .map(|project| project.is_some())
                 .unwrap_or(true);
             let transition_active = state.transition.try_lock().is_err();
-            if !session_active
+            if state.mode != AppMode::Runner
+                && !session_active
                 && !preview_active
                 && !transition_active
                 && app.get_webview_window("preview").is_none()
@@ -1677,7 +1734,7 @@ async fn trigger_flow(
         let value = state.preview_rpc("trigger_flow", json!({"flowId":flow_id,"entryNodeId":entry_node_id,"message":message,"inputs":inputs,"expectedGeneration":expected_generation,"preferRuntimeInputs":true})).await?;
         return serde_json::from_value(value).map_err(error);
     }
-    if state.preview_host_mode {
+    if state.preview_host_mode && message.pointer("/context/windowInstanceId").is_none() {
         let run_id = state
             .session_for(expected_generation)
             .await?
@@ -1859,11 +1916,12 @@ async fn import_asset(path: String, state: State<'_, DesktopState>) -> Result<Va
         .unwrap_or("")
         .to_ascii_lowercase();
     if ![
-        "png", "jpg", "jpeg", "webp", "gif", "woff", "woff2", "ttf", "otf",
+        "png", "jpg", "jpeg", "webp", "gif", "woff", "woff2", "ttf", "otf", "bin", "hex", "ihx",
+        "ptbcfg", "json",
     ]
     .contains(&extension.as_str())
     {
-        return Err("支持 PNG/JPEG/WebP/GIF 图片及 WOFF/WOFF2/TTF/OTF 字体".into());
+        return Err("支持图片、字体、BIN/HEX/IHX 固件及 PTBCFG/JSON 配置文件".into());
     }
     if std::fs::metadata(&source).map_err(error)?.len() > 64 * 1024 * 1024 {
         return Err("单个资源最大 64 MiB".into());
@@ -1872,8 +1930,15 @@ async fn import_asset(path: String, state: State<'_, DesktopState>) -> Result<Va
     let relative = format!("assets/{id}.{extension}");
     let destination = state.workspace.root().join(&relative);
     std::fs::create_dir_all(destination.parent().unwrap()).map_err(error)?;
-    std::fs::copy(source, &destination).map_err(error)?;
-    Ok(json!({"id":id,"path":relative,"absolutePath":destination}))
+    let checksum = sha256(&source)?;
+    let name = source.file_name().unwrap().to_string_lossy().into_owned();
+    std::fs::copy(&source, &destination).map_err(error)?;
+    if sha256(&destination)? != checksum {
+        return Err("资源复制期间发生变化".into());
+    }
+    Ok(
+        json!({"id":id,"path":relative,"absolutePath":destination,"name":name,"size":std::fs::metadata(&destination).map_err(error)?.len(),"sha256":checksum}),
+    )
 }
 #[tauri::command]
 async fn resolve_assets(project: Project, state: State<'_, DesktopState>) -> Result<Value> {
@@ -2163,6 +2228,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
     let workspace_state = workspace.clone();
     let state = DesktopState {
         mode,
+        runtime_windows: runtime_windows::RuntimeWindows::default(),
         resources,
         project_path: Mutex::new(project_path),
         current_project: Mutex::new(Some(initial_project.clone())),
@@ -2201,6 +2267,9 @@ pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
         .manage(workspace_state)
         .invoke_handler(tauri::generate_handler![
             get_environment,
+            runtime_windows::get_runtime_window_state,
+            runtime_windows::update_runtime_window_input,
+            runtime_files::runtime_import_file,
             get_initial_project,
             open_project,
             save_project,
@@ -2208,6 +2277,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
             list_serial_ports,
             list_plugins,
             import_plugin,
+            import_backend,
             import_python_runtime,
             import_python_dependencies,
             start_preview,

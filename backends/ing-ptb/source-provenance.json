@@ -1,0 +1,92 @@
+{
+    "format":  "hmi-source-provenance",
+    "version":  1,
+    "sourceProject":  "ING_PTB",
+    "compatibilityBaseline":  "Current GUI three-stage C1-C7 protocol, 94-byte C3 configuration header",
+    "extractedAt":  "2026-10-16T12:22:08.4248750+08:00",
+    "referenceReadOnly":  true,
+    "files":  [
+                  {
+                      "source":  "07-gui/IngPtbTool/Protocol/CrcAlgorithms.cs",
+                      "sha256":  "2ad67823e667ba15394fda079485962a616546b9e76230a1cd7bf5a36a39f303",
+                      "destination":  "Protocol/CrcAlgorithms.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Protocol/PtbFrame.cs",
+                      "sha256":  "e52bcbed8f99cdf68f854d1ccaf5c23e70b46685bfa9c6216e3d55b1f08d28ec",
+                      "destination":  "Protocol/PtbFrame.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Protocol/PtbTransfer.cs",
+                      "sha256":  "74a2fa69f30e7fd22b36b73b2d840dd96cc43f1bd363238b815acfb948f7bb68",
+                      "destination":  "Protocol/PtbTransfer.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Configuration/ConfigurationFileService.cs",
+                      "sha256":  "7c0a35e637cc8f2e2606c29e96308df7438d415e64856af359966f406c9e1e16",
+                      "destination":  "Configuration/ConfigurationFileService.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Configuration/ConfigurationJsonContext.cs",
+                      "sha256":  "cb66f7af9dda0b4ca825cabf3a12c6e986a4e470daad39e7557f18aae00e7b4c",
+                      "destination":  "Configuration/ConfigurationJsonContext.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Configuration/DataPackageBuilder.cs",
+                      "sha256":  "f40eaf88af42b20f2ecd47a07e36f9d3a53b2d558c5f0b37b5f03b71d1ec10ae",
+                      "destination":  "Configuration/DataPackageBuilder.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Configuration/DutFirmwarePackageBuilder.cs",
+                      "sha256":  "02b88824b654be8fe89cc69300efe25c04168d6f943b5907f2d1e3009bfed21d",
+                      "destination":  "Configuration/DutFirmwarePackageBuilder.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Configuration/FirmwareLoader.cs",
+                      "sha256":  "f4518a5abf48eae4fade5f3688d7908ac48c1f1c8d6e9dd1c6f0979690f3c881",
+                      "destination":  "Configuration/FirmwareLoader.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Models/PtbModels.cs",
+                      "sha256":  "a0ad06822ada14934560c9ae19341d98356bbed64194a315fe13bad0ef78f4bf",
+                      "destination":  "Models/PtbModels.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Services/Transport/IPtbTransport.cs",
+                      "sha256":  "53e932c18fb5670aa853a3d27f347708747b1bae7db7d6aa90b3a9cd44a602c3",
+                      "destination":  "Services/Transport/IPtbTransport.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Services/Transport/UsbPrintDeviceEnumerator.cs",
+                      "sha256":  "3faad6946fa84a8e91746fe3a3d7e99345faf89d655c5947b1308d6a63bde9b8",
+                      "destination":  "Services/Transport/UsbPrintDeviceEnumerator.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Services/Transport/UsbPrintTransport.cs",
+                      "sha256":  "a7ea2bed6bd6f3a2ba8914b92389cf72a1caed38c4e6eae2ffd59a01ca216245",
+                      "destination":  "Services/Transport/UsbPrintTransport.cs"
+                  },
+                  {
+                      "source":  "07-gui/IngPtbTool/Services/Device/PtbUsbDeviceIdentity.cs",
+                      "sha256":  "4a4c3367484f6c50c0eff5d35fd4b92d68976d2cf605a3286f1a0327eb2dfee8",
+                      "destination":  "Services/Device/PtbUsbDeviceIdentity.cs"
+                  }
+              ],
+    "adaptations":  [
+                        "Removed Avalonia/CommunityToolkit view-model coupling.",
+                        "Replaced retrying reference session with single-flight drain-on-cancel, no automatic replay and reset-required isolation.",
+                        "Added host asset references, NativeAOT JSON source generation, per-device state and JSON-RPC host.",
+                        "Added Windows device lease and persisted recovery guard; retained USB Printer ZLP.",
+                        "Kept source configuration/package formats; HEX accepts verified in-memory contents."
+                    ],
+    "newFiles":  [
+                     "Engine.cs",
+                     "Program.cs",
+                     "ResourceRegistry.cs",
+                     "SettingsService.cs",
+                     "Services/Device/PtbDeviceSession.cs",
+                     "Services/Transport/SimulatedTransport.cs",
+                     "Services/Transport/UsbDeviceLease.cs",
+                     "Services/Transport/UsbRecoveryGuard.cs"
+                 ]
+}

@@ -115,7 +115,7 @@ impl PreviewHostProcess {
             .tempdir()
             .map_err(|e| e.to_string())?;
         crate::resources::copy_tree(base_resources, resources.path())?;
-        for directory in ["assets", "plugins", "python"] {
+        for directory in ["assets", "plugins", "python", "backends"] {
             let source = workspace_root.join(directory);
             if source.is_dir() {
                 crate::resources::copy_tree(&source, &resources.path().join(directory))?;
@@ -232,7 +232,7 @@ impl PreviewHostProcess {
         let destination = revisions.join(&key);
         let staging = tempfile::tempdir_in(&revisions).map_err(|e| e.to_string())?;
         crate::resources::copy_tree(&self.base_resources, staging.path())?;
-        for directory in ["assets", "plugins", "python"] {
+        for directory in ["assets", "plugins", "python", "backends"] {
             let source = workspace_root.join(directory);
             if source.is_dir() {
                 crate::resources::copy_tree(&source, &staging.path().join(directory))?;
@@ -278,7 +278,7 @@ impl PreviewHostProcess {
             return;
         }
         let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(25),
             self.peer.request("shutdown", serde_json::json!({})),
         )
         .await;
@@ -307,11 +307,11 @@ impl PreviewHostProcess {
 
 fn resource_tree_key(workspace_root: &Path, project: &hmi_core::Project) -> Result<String> {
     let mut hash = Sha256::new();
-    let metadata = serde_json::to_vec(&(&project.id, &project.assets, &project.python))
+    let metadata = serde_json::to_vec(&(&project.id, &project.assets, &project.python, &project.backends))
         .map_err(|e| e.to_string())?;
     hash.update(metadata);
     let mut files = Vec::new();
-    for directory in ["assets", "plugins", "python"] {
+    for directory in ["assets", "plugins", "python", "backends"] {
         let root = workspace_root.join(directory);
         if root.is_dir() {
             for entry in walkdir::WalkDir::new(&root).follow_links(false) {

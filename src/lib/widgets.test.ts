@@ -5,7 +5,7 @@ import { containerChildren, getRootWidgets, getWidgetChildren, isContainer, layo
 describe('shared widget catalog and recursive layouts', () => {
   it('keeps the requested common Qt-style kinds in a single catalog', () => {
     expect(widgetKinds.map(item => item.kind)).toEqual([
-      'text','button','tool-button','input','textarea','checkbox','radio','select','switch','spinbox','slider','date','time','datetime','image','number','indicator','progress','chart','log','list','tree','table','group','frame','scroll','tabs','stack','splitter','dialog','menu','toolbar','statusbar','separator','spacer',
+      'text','button','tool-button','input','textarea','checkbox','radio','select','switch','spinbox','slider','date','time','datetime','image','number','indicator','progress','chart','log','list','tree','table','group','frame','scroll','tabs','stack','splitter','dialog','menu','toolbar','statusbar','separator','spacer','file-picker','byte-range','memory-map',
     ])
     expect(new Set(widgetKinds.map(item => item.kind)).size).toBe(widgetKinds.length)
   })

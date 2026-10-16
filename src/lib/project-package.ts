@@ -37,7 +37,8 @@ export class BrowserProjectPackage {
     for(const path of this.files.keys())if(/^i18n\/[^/]+\.json$/.test(path))this.files.delete(path)
     for(const [locale,messages]of Object.entries(project.i18n?.messages??{}))this.files.set(`i18n/${locale}.json`,encoder.encode(JSON.stringify(messages,null,2)))
     for(const asset of project.assets??[])if(!safePath(asset.path)||!this.files.has(asset.path))throw Error(`工程资源缺失或路径无效：${asset.path}`)
-    const missing=new Set(this.missingDependencies.filter(value=>!value.startsWith('plugin:')&&!value.startsWith('python:')))
+    const missing=new Set(this.missingDependencies.filter(value=>!value.startsWith('plugin:')&&!value.startsWith('python:')&&!value.startsWith('backend:')))
+    for(const backend of project.backends??[])if(![...this.files.keys()].some(path=>path===`backends/${backend.providerId}/manifest.json`||path.startsWith('backends/')&&path.endsWith(`/${backend.providerId}/manifest.json`)))missing.add(`backend:${backend.providerId}`)
     for(const connection of project.connections)if(![...this.files.keys()].some(path=>path===`plugins/${connection.protocolId}/manifest.json`||path.startsWith('plugins/')&&path.endsWith(`/${connection.protocolId}/manifest.json`)))missing.add(`plugin:${connection.protocolId}`)
     if(project.flows.some(flow=>flow.nodes.some(node=>node.kind==='python'))){if(!project.python)missing.add('python:runtime-not-configured');else if(![...this.files.keys()].some(path=>path.startsWith('python/')&&(path===`python/${project.python!.runtimeId}/runtime-manifest.json`||path.endsWith(`/${project.python!.runtimeId}/runtime-manifest.json`)||path.endsWith(`/projects/${project.id}/runtime-manifest.json`))))missing.add(`python:${project.python.runtimeId}`)}
     this.missingDependencies=[...missing].sort()

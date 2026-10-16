@@ -17,7 +17,7 @@ pub async fn execute(args: Vec<String>) -> Result<Value> {
     let operation = args.first().map(String::as_str).unwrap_or("help");
     if operation == "help" {
         return Ok(
-            json!({"usage":"hmi-cli <validate|smoke|export> --project project.json [--resources .cache] [--destination out.zip] [--flow flowId]"}),
+            json!({"usage":"hmi-cli <validate|smoke|package|export> --project project.json [--resources .cache] [--destination out.hmiproj|out.zip] [--flow flowId]"}),
         );
     }
     let path = PathBuf::from(option("--project").ok_or("--project is required")?)
@@ -47,6 +47,30 @@ pub async fn execute(args: Vec<String>) -> Result<Value> {
         )?)
         .map_err(error);
     }
+    if operation == "package" {
+        let destination = option("--destination").ok_or("--destination is required")?;
+        let staging = tempfile::tempdir().map_err(error)?;
+        let missing = crate::workspace::stage_project_dependencies(
+            &project,
+            staging.path(),
+            &resources.root,
+        )?;
+        for asset in &project.assets {
+            let source = contained_file(path.parent().unwrap(), &asset.path)?;
+            let target = staging
+                .path()
+                .join(crate::project_package::safe_relative(&asset.path)?);
+            std::fs::create_dir_all(target.parent().unwrap()).map_err(error)?;
+            std::fs::copy(source, target).map_err(error)?;
+        }
+        return serde_json::to_value(crate::project_package::write_package_with_missing(
+            Path::new(&destination),
+            &project,
+            staging.path(),
+            missing,
+        )?)
+        .map_err(error);
+    }
     if operation != "smoke" {
         return Err("Unknown operation".into());
     }
@@ -57,7 +81,19 @@ pub async fn execute(args: Vec<String>) -> Result<Value> {
     {
         return Err("Automated smoke only allows the explicit simulation transport".into());
     }
-    let session = session::Session::new(project.clone(), resources).await?;
+    if project
+        .backends
+        .iter()
+        .any(|backend| backend.mode != "simulation")
+    {
+        return Err("Automated smoke only allows explicit backend simulation mode".into());
+    }
+    let session = session::Session::new_with_assets(
+        project.clone(),
+        resources,
+        path.parent().map(Path::to_path_buf),
+    )
+    .await?;
     let result = async {
         session.runtime.start().await.map_err(error)?;
         let connections = session.connection_manager().await;

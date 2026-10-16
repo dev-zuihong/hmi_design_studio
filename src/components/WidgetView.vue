@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import FButton from './fluent/FButton.vue'
-import FInput from './fluent/FInput.vue'
+import ValidatedInput from './ValidatedInput.vue'
+import RuntimeFilePicker from './RuntimeFilePicker.vue'
+import ByteRangePicker from './ByteRangePicker.vue'
+import MemoryMapView from './MemoryMapView.vue'
+import RuntimeTable from './RuntimeTable.vue'
+import StructuredLog from './StructuredLog.vue'
 import FToggle from './fluent/FToggle.vue'
 import FSelect from './fluent/FSelect.vue'
 import { Activity, AlertCircle, Check, CircleDot, Download, FileText, FolderOpen, Link2, Play, Power, RefreshCcw, Save, Search, Settings, SquareStop, Trash2, X, Zap } from 'lucide-vue-next'
 import type { Project, RuntimeEvent, Snapshot, UiAction, Widget } from '../lib/model'
-import { clone } from '../lib/model'
 import { assetUrls, assetFonts } from '../lib/resources'
-import { isContainer } from '../lib/widgets'
+import { isContainer, resolveRuntimePath } from '../lib/widgets'
 import { projectLocale, projectText } from '../lib/i18n'
 import './widget-style.css'
 const props = defineProps<{ widget: Widget; project: Project; snapshot?: Snapshot; events?: RuntimeEvent[]; editing?: boolean; locale?: string; editorSlot?:string }>()
@@ -62,6 +66,8 @@ function resolveWidgetProperty(widgetId: string, property: string, visited: Set<
 }
 function resolveRef(ref: NonNullable<Widget['bindings'][string]>, visited=new Set<string>()) {
   if (ref.source === 'literal') return ref.value
+  if (ref.source === 'backend') return resolveRuntimePath(props.snapshot?.backends?.[ref.key],ref.path,props.snapshot?.context)
+  if (ref.source === 'context') return resolveRuntimePath(props.snapshot?.context,ref.path)
   if (ref.source === 'variable') return props.snapshot?.variables[ref.key] ?? props.project.variables.find(v => v.id === ref.key)?.initial
   if (ref.source === 'input') return props.snapshot?.inputs?.[ref.key] ?? props.snapshot?.ui?.[`${ref.key}.value`] ?? props.snapshot?.ui?.[ref.key]?.value ?? props.snapshot?.ui?.[ref.key]?.input
   if (ref.source === 'property') return resolveWidgetProperty(ref.key,ref.property,visited)
@@ -75,6 +81,7 @@ function snapshotInput() {
     ? { found: true, value: inputs[props.widget.id] }
     : { found: false, value: undefined }
 }
+const runtimeScope = computed(() => JSON.stringify([props.snapshot?.context?.windowInstanceId ?? '', props.snapshot?.context?.deviceKey ?? '']))
 const inputValue = computed(() => {
   if (valueIsBound()) return values.value.value
   const persisted = snapshotInput()
@@ -119,17 +126,12 @@ watch(() => values.value.value, value => { if (props.editing || value === undefi
 const series = computed(() => { const data = samples.value; if (data.length < 2) return ''; const min = Math.min(...data) - 1, max = Math.max(...data) + 1; return data.map((v, i) => `${(i / (data.length - 1)) * 560 + 8},${130 - ((v - min) / (max - min)) * 112}`).join(' ') })
 const listItems = computed<any[]>(() => Array.isArray(values.value.items) ? values.value.items.map(translateTreeItem) : [])
 function translateTreeItem(item:any):any { if(typeof item==='string')return translate(item); if(!item||typeof item!=='object')return item; const labelKey='label' in item?'label':'text' in item?'text':undefined; return {...item,...(labelKey?{[labelKey]:translate(item[labelKey])}:{}),...(Array.isArray(item.children)?{children:item.children.map(translateTreeItem)}:{})} }
-const columns = computed<any[]>(() => Array.isArray(values.value.columns) ? values.value.columns : [])
 const rowsValue = computed(() => {
   if (valueIsBound()) return Array.isArray(values.value.value) ? values.value.value : values.value.rows
   const persisted = snapshotInput()
   return persisted.found && Array.isArray(persisted.value) ? persisted.value : values.value.rows
 })
-const localRows = ref<any[]>(Array.isArray(rowsValue.value) ? clone(rowsValue.value) : [])
-watch(rowsValue, rows => { if (Array.isArray(rows)) localRows.value = clone(rows) }, { deep: true })
-const rows = computed<any[]>(() => localRows.value)
-const sortedRows = computed(() => { const key = sortKey.value; if (!key) return rows.value; return [...rows.value].sort((a,b) => String(a[key] ?? '').localeCompare(String(b[key] ?? ''), undefined, { numeric: true }) * (sortDirection.value === 'asc' ? 1 : -1)) })
-const sortKey = ref(''), sortDirection = ref<'asc'|'desc'>('asc'), selectedRow = ref<string | number | null>(null), selectedItem = ref<string | null>(null)
+const selectedItem = ref<string | null>(null)
 function itemLabel(item: any) { if(typeof item==='object'&&item&&'i18nKey' in item)return translate(item); return translate(typeof item === 'string' ? item : item?.label ?? item?.name ?? item?.id ?? '') }
 function itemKey(item: any, index: number) { return String(item?.id ?? item?.key ?? index) }
 function optionValue(option:any) { return String(typeof option==='string'?option:option?.value ?? option?.id ?? option?.label ?? '') }
@@ -143,11 +145,13 @@ function visibleActions(items:unknown[]){return items.map(item=>typeof item==='s
 function actionIcon(id?:string){const name=id?props.project.actions?.find(item=>item.id===id)?.icon:undefined;return name?actionIconMap[name]:undefined}
 function widgetIcon(event:string){const configured=props.widget.events?.[event];return configured?.kind==='shared'?actionIcon(configured.actionId):actionIconMap[values.value.icon]}
 function update(value: unknown, event = 'change') { input.value = value; if (!props.editing) emit('input', props.widget.id, value); action(event, value) }
+function updateSelection(value: string) { const option = (values.value.options ?? []).find((item: any) => optionValue(item) === value); update(option && typeof option === 'object' ? option.value : value) }
 function selectItem(item: any, index: number) { selectedItem.value = itemKey(item,index); const payload = { key: selectedItem.value, value: item }; emit('selection', props.widget.id, payload); action('selectionChange', payload) }
-function selectRow(row: any) { const key = row?.id ?? row?.key ?? rows.value.indexOf(row); selectedRow.value = key; const payload = { rowKey: key, row }; emit('selection', props.widget.id, payload); action('selectionChange', payload) }
-function editCell(row: any, column: any, event: Event) { const next = (event.target as HTMLInputElement).value; const old = row[column.key]; const key = row.id ?? row.key ?? rows.value.indexOf(row); const nextValue = coerce(next,column.type); const value = rows.value.map(item => item === row ? { ...item, [column.key]: nextValue } : item); localRows.value=value; input.value=value; if(!props.editing) emit('input',props.widget.id,value); action('cellEdit', { rowKey: key, columnKey: column.key, oldValue: old, newValue: nextValue }) }
-function coerce(value: string, type: string) { if (type === 'number') return Number(value); if (type === 'boolean') return value === 'true'; return value }
 function setSlot(slot: string) { activeSlot.value = slot; emit('slotChange',props.widget.id,slot); if (!props.editing) update(slot,'tabChange') }
+function setInput(value:unknown) { input.value=value;if(!props.editing)emit('input',props.widget.id,value) }
+function changeFile(payload:any){setInput(payload.value);action('change',payload)}
+const progressFraction=computed(()=>{const min=Number(values.value.min??0),max=Number(values.value.max??100),value=Number(values.value.value??0);return Number.isFinite(value)&&max>min?Math.max(0,Math.min(1,(value-min)/(max-min))):0})
+const logEntries=computed(()=>values.value.source==='entries'?(Array.isArray(values.value.entries)?values.value.entries:[]):props.events??[])
 const tabsLike = computed(() => ['tabs','stack'].includes(props.widget.kind))
 const actionHidden = computed(()=>Object.values(props.widget.events??{}).some(event=>event.kind==='shared'&&props.project.actions?.find(item=>item.id===event.actionId)?.visible===false))
 const widgetVisible=computed(()=>values.value.visible!==false&&!actionHidden.value)
@@ -155,17 +159,21 @@ function actionEnabledFor(event:string){const action=props.widget.events?.[event
 const disabledSharedAction=computed(()=>Object.values(props.widget.events??{}).some(event=>event.kind==='shared'&&props.project.actions?.find(item=>item.id===event.actionId)?.enabled===false))
 const widgetDisabled=computed(()=>values.value.enabled===false||disabledSharedAction.value)
 const changeDisabled=computed(()=>widgetDisabled.value||!actionEnabledFor('change'))
+watch(runtimeScope, () => { input.value = inputValue.value; activeSlot.value = activeSlotValue.value; selectedItem.value = null; dialogOpen.value = values.value.open !== false; openMenuGroup.value = null })
 </script>
 
 <template>
-  <div v-if="editing || widgetVisible" class="widget-content" :class="[`widget-${widget.kind}`, { 'widget-disabled': widgetDisabled, 'widget-container': isContainer(widget) }]" :style="style" :inert="(!editing && widgetDisabled) || (editing && !isContainer(widget))">
+  <div v-if="editing || widgetVisible" class="widget-content" :class="[`widget-${widget.kind}`, { 'widget-disabled': widgetDisabled, 'widget-container': isContainer(widget), 'widget-tabs-left': tabsLike && values.tabPlacement==='left' }]" :style="style" :inert="(!editing && widgetDisabled) || (editing && !isContainer(widget))">
     <span v-if="widget.kind === 'text'">{{ values.text }}</span>
     <FButton v-else-if="widget.kind === 'button' || widget.kind === 'tool-button'" :appearance="values.appearance === 'accent' ? 'primary' : values.appearance" :disabled="changeDisabled || !actionEnabledFor('click')" :title="values.tooltip" @click="action('click')"><component v-if="widgetIcon('click')" :is="widgetIcon('click')" :size="15"/><span v-else-if="widget.kind==='tool-button'&&values.icon">{{values.icon}}</span>{{ values.text }}</FButton>
-    <FInput v-else-if="widget.kind === 'input'" :model-value="String(input ?? '')" :placeholder="values.placeholder || values.text" :disabled="changeDisabled" @update:model-value="update" />
+    <ValidatedInput v-else-if="widget.kind === 'input'" :key="runtimeScope" :model-value="input" :placeholder="values.placeholder || values.text" :disabled="changeDisabled" :read-only="values.readOnly" :format="values.format" :pattern="values.pattern" :required="values.required" :max-length="values.maxLength" :commit-mode="values.commitMode" :locale="locale??projectLocale" @change="update" />
+    <RuntimeFilePicker v-else-if="widget.kind === 'file-picker'" :key="runtimeScope" :model-value="input as any" :accept="values.accept" :allow-manual-path="values.allowManualPath" :clearable="values.clearable" :disabled="changeDisabled" :read-only="values.readOnly" :status="values.status" :message="values.message" :locale="locale??projectLocale" @change="changeFile"/>
+    <ByteRangePicker v-else-if="widget.kind === 'byte-range'" :key="runtimeScope" :model-value="input as any" :byte-length="Number(values.byteLength)" :allow-empty="values.allowEmpty" :disabled="changeDisabled" :read-only="values.readOnly" :locale="locale??projectLocale" @change="update"/>
+    <MemoryMapView v-else-if="widget.kind === 'memory-map'" :range-start="Number(values.rangeStart)" :range-size="Number(values.rangeSize)" :segments="values.segments" :locale="locale??projectLocale"/>
     <textarea v-else-if="widget.kind === 'textarea'" class="widget-native-input" :value="String(input ?? '')" :placeholder="values.placeholder" :rows="values.rows ?? 4" :disabled="changeDisabled" @input="update(($event.target as HTMLTextAreaElement).value)" />
     <label v-else-if="widget.kind === 'checkbox'" class="widget-check"><input type="checkbox" :checked="Boolean(input)" :disabled="changeDisabled" @change="update(($event.target as HTMLInputElement).checked)"><span>{{ values.text }}</span></label>
     <fieldset v-else-if="widget.kind === 'radio'" class="widget-radio"><legend>{{ values.text }}</legend><label v-for="option in values.options ?? []" :key="optionValue(option)"><input type="radio" :name="widget.id" :value="optionValue(option)" :checked="input === optionValue(option)" :disabled="changeDisabled" @change="update(optionValue(option))">{{ optionLabel(option) }}</label></fieldset>
-    <FSelect v-else-if="widget.kind === 'select'" :model-value="String(input ?? '')" :options="values.options ?? []" :placeholder="values.placeholder || values.text" :disabled="changeDisabled" @update:model-value="update" />
+    <FSelect v-else-if="widget.kind === 'select'" :model-value="String(input ?? '')" :options="values.options ?? []" :placeholder="values.placeholder || values.text" :disabled="changeDisabled" @update:model-value="updateSelection" />
     <FToggle v-else-if="widget.kind === 'switch'" :model-value="Boolean(input)" :disabled="changeDisabled" @update:model-value="update">{{ values.text }}</FToggle>
     <label v-else-if="widget.kind === 'spinbox'" class="widget-labeled-input"><span>{{ values.text }}</span><input class="widget-native-input" type="number" :value="Number(input ?? 0)" :min="values.min" :max="values.max" :step="values.step ?? 1" :disabled="changeDisabled" @input="update(Number(($event.target as HTMLInputElement).value))"></label>
     <label v-else-if="widget.kind === 'slider'" class="widget-slider"><span>{{ values.text }}</span><input type="range" :value="Number(input ?? values.min ?? 0)" :min="values.min ?? 0" :max="values.max ?? 100" :step="values.step ?? 1" :disabled="changeDisabled" @input="update(Number(($event.target as HTMLInputElement).value))"><output>{{ input }}</output></label>
@@ -173,14 +181,14 @@ const changeDisabled=computed(()=>widgetDisabled.value||!actionEnabledFor('chang
     <img v-else-if="widget.kind === 'image'" class="widget-image" :src="assetUrls[values.assetId] ?? assetUrls[values.backgroundAssetId]" :alt="values.text" :style="{objectFit: values.fit ?? 'contain'}">
     <div v-else-if="widget.kind === 'number'" class="metric"><span class="metric-label">{{ values.text }}</span><div class="metric-value">{{ number }} <span class="metric-unit">{{ values.unit }}</span></div><span class="metric-caption">{{ systemText(editing ? '绑定数据后实时更新' : '当前读数') }}</span></div>
     <div v-else-if="widget.kind === 'indicator'" class="indicator"><span class="indicator-dot" :style="{backgroundColor: values.value ? values.onColor : values.offColor}" />{{ values.text }}</div>
-    <div v-else-if="widget.kind === 'progress'" class="widget-progress"><div class="widget-panel-title">{{ values.text }}<span v-if="values.showValue !== false">{{ Math.round(100 * (Number(values.value ?? 0)-Number(values.min ?? 0))/(Number(values.max ?? 100)-Number(values.min ?? 0) || 1)) }}%</span></div><progress :value="values.value ?? 0" :min="values.min ?? 0" :max="values.max ?? 100" /></div>
+    <div v-else-if="widget.kind === 'progress'" class="widget-progress"><div class="widget-panel-title">{{ values.text }}<span v-if="values.showValue !== false && !values.indeterminate">{{ Math.round(progressFraction*100) }}%</span></div><progress :value="values.indeterminate?undefined:progressFraction" :max="1" :aria-label="values.text" /></div>
     <div v-else-if="widget.kind === 'chart'" class="chart"><div class="widget-panel-title">{{ values.text }}<span>{{ values.unit }}</span></div><div class="chart-area"><div class="chart-grid" /><svg viewBox="0 0 576 146" preserveAspectRatio="none" :aria-label="systemText('实时')"><polyline v-if="series" :points="series" fill="none" stroke="#0f6cbd" stroke-width="2" vector-effect="non-scaling-stroke" /></svg><span v-if="!series" class="chart-empty">{{ systemText(editing ? '数据趋势将在运行时显示' : '等待数据采集') }}</span></div><div class="chart-axis"><span>{{ systemText('历史') }}</span><span>{{ systemText('实时') }}</span></div></div>
-    <div v-else-if="widget.kind === 'log'" class="runtime-log"><div class="widget-panel-title">{{ values.text }}</div><div v-if="!events?.length" class="log-empty">{{ systemText('运行记录将在这里显示') }}</div><div v-for="(event, index) in events?.slice(-Math.max(1, Number(values.maxLines ?? 100)))" :key="index" class="runtime-log-line"><span>{{ new Date(event.timestamp).toLocaleTimeString(locale??projectLocale) }}</span><code>{{ event.kind }} {{ JSON.stringify(event.data) }}</code></div></div>
+    <div v-else-if="widget.kind === 'log'" class="runtime-log"><div class="widget-panel-title">{{ values.text }}</div><StructuredLog :entries="logEntries" :max-lines="values.maxLines" :auto-scroll="values.autoScroll!==false" :wrap="values.wrap!==false" :level="values.level" :device-key="values.deviceKey" :locale="locale??projectLocale"/></div>
     <div v-else-if="widget.kind === 'list'" class="widget-list"><div class="widget-panel-title">{{ values.text }}</div><button v-for="(item,index) in listItems" :key="itemKey(item,index)" :class="{selected:selectedItem===itemKey(item,index)}" @click="selectItem(item,index)">{{ itemLabel(item) }}</button></div>
     <div v-else-if="widget.kind === 'tree'" class="widget-tree"><div class="widget-panel-title">{{ values.text }}</div><TreeItems :items="listItems" :selected="selectedItem" @select="selectItem" /></div>
-    <div v-else-if="widget.kind === 'table'" class="widget-table-wrap"><div class="widget-panel-title">{{ values.text }}</div><table class="widget-table"><thead><tr><th v-if="values.selectable !== false"></th><th v-for="column in columns" :key="column.key" @click="values.sortable !== false && (sortKey === column.key ? sortDirection = sortDirection === 'asc' ? 'desc' : 'asc' : (sortKey = column.key, sortDirection = 'asc'))">{{ column.title ?? column.key }}<span v-if="sortKey===column.key">{{ sortDirection === 'asc' ? ' ▲' : ' ▼' }}</span></th></tr></thead><tbody><tr v-for="(row,index) in sortedRows" :key="String(row.id ?? row.key ?? index)" :class="{selected:selectedRow===(row.id ?? row.key ?? index)}" @click="values.selectable !== false && selectRow(row)"><td v-if="values.selectable !== false"><input type="radio" :name="widget.id+'-row'" :checked="selectedRow===(row.id ?? row.key ?? index)"></td><td v-for="column in columns" :key="column.key"><select v-if="column.editable && column.type==='enum'" :value="row[column.key]" @click.stop @change="editCell(row,column,$event)"><option v-for="option in column.options ?? []" :key="option" :value="option">{{ option }}</option></select><input v-else-if="column.editable && column.type==='boolean'" type="checkbox" :checked="Boolean(row[column.key])" @click.stop @change="editCell(row,column,{target:{value:($event.target as HTMLInputElement).checked ? 'true':'false'}} as unknown as Event)"><input v-else-if="column.editable" :type="column.type==='number'?'number':'text'" :value="row[column.key]" @click.stop @change="editCell(row,column,$event)"><span v-else>{{ row[column.key] }}</span></td></tr></tbody></table></div>
+    <RuntimeTable v-else-if="widget.kind === 'table'" :key="runtimeScope" :rows="rowsValue" :columns="values.columns" :row-key="values.rowKey" :selectable="values.selectable!==false" :sortable="values.sortable!==false" :disabled="widgetDisabled" :label="values.text" :locale="locale??projectLocale" :translate="translate" @input="setInput" @event="action" @selection="emit('selection',widget.id,$event)"/>
     <div v-else-if="widget.kind === 'group' || widget.kind === 'frame'" class="widget-container-caption">{{ values.text }}</div>
-    <div v-else-if="tabsLike" class="widget-tabs" :class="`tabs-${widget.kind}`"><div class="widget-tabs-header"><button v-for="slot in values.slots ?? widget.slots ?? []" :key="slot.id" :class="{active:activeSlot===slot.id}" @click="setSlot(slot.id)">{{ slot.title }}</button></div></div>
+    <div v-else-if="tabsLike" class="widget-tabs" :class="`tabs-${widget.kind}`" :style="values.tabPlacement==='left'?{width:`${values.tabWidth??120}px`}:undefined"><div class="widget-tabs-header"><button v-for="slot in values.slots ?? widget.slots ?? []" :key="slot.id" :class="{active:activeSlot===slot.id}" @click="setSlot(slot.id)">{{ slot.title }}</button></div></div>
     <div v-else-if="widget.kind === 'splitter'" class="widget-splitter" :class="`splitter-${values.orientation ?? 'horizontal'}`"><span>{{ values.text }}</span></div>
     <div v-else-if="widget.kind === 'dialog'" v-show="editing || dialogOpen" class="widget-dialog-overlay" :class="{'dialog-modal':values.modal!==false&&!editing,'dialog-design':editing}" @click.self="values.modal!==false&&!editing&&closeDialog()"><section class="widget-dialog-surface" role="dialog" :aria-modal="values.modal!==false" :aria-label="values.text" @keydown.esc="closeDialog"><header><strong>{{ values.text }}</strong><button type="button" aria-label="关闭对话框" @click="closeDialog">×</button></header><div class="widget-dialog-content"><slot slot-id="content" /></div></section></div>
     <nav v-else-if="widget.kind === 'menu'" class="widget-menu"><template v-if="values.groups?.length || values.items?.length"><template v-for="group in values.groups ?? []" :key="group.id"><button class="widget-menu-toggle" :disabled="widgetDisabled" :aria-expanded="menuPosition.id===group.id" aria-haspopup="menu" @click="toggleMenuGroup($event,group.id)">{{ group.title }}<span aria-hidden="true">⌄</span></button><Teleport to="body"><div v-if="menuPosition.id===group.id" class="widget-menu-popup" role="menu" :data-menu-id="group.id" :style="{left:`${menuPosition.x}px`,top:`${menuPosition.y}px`}" @pointerdown.stop @keydown.esc.stop.prevent="openMenuGroup=null"><button v-for="actionId in visibleActions(group.actionIds ?? [])" :key="actionId" role="menuitem" :disabled="widgetDisabled||!actionEnabled(actionId)" @click="runMenuAction(actionId)"><component v-if="actionIcon(actionId)" :is="actionIcon(actionId)" :size="14"/>{{ actionLabel(actionId) }}</button><span v-if="!visibleActions(group.actionIds ?? []).length" class="widget-menu-empty">此菜单暂无动作</span></div></Teleport></template><button v-for="actionId in visibleActions(values.items ?? [])" :key="actionId" :disabled="widgetDisabled||!actionEnabled(actionId)" @click="runShared(actionId)"><component v-if="actionIcon(actionId)" :is="actionIcon(actionId)" :size="14"/>{{ actionLabel(actionId) }}</button></template><span v-else>{{ values.text }}</span></nav>
@@ -188,7 +196,7 @@ const changeDisabled=computed(()=>widgetDisabled.value||!actionEnabledFor('chang
     <div v-else-if="widget.kind === 'statusbar'" class="widget-statusbar"><span>{{ values.text }}</span><span>{{ values.status ?? '' }}</span></div>
     <hr v-else-if="widget.kind === 'separator'" class="widget-separator" :class="`separator-${values.orientation ?? 'horizontal'}`">
     <span v-else-if="widget.kind === 'spacer'" class="widget-spacer" :style="{flex: values.flex ?? 1}" />
-    <span v-else>未知控件：{{ widget.kind }}</span>
+    <span v-else-if="!isContainer(widget)">未知控件：{{ widget.kind }}</span>
     <div v-if="widget.kind==='splitter' && $slots.default" class="widget-splitter-panes" :class="`splitter-${values.orientation ?? 'horizontal'}`"><div class="widget-splitter-pane" :style="{flex:`${splitterRatio}`}" ><slot slot-id="first" /></div><div class="widget-splitter-handle" :class="`splitter-handle-${values.orientation ?? 'horizontal'}`" role="separator" tabindex="0" :aria-orientation="values.orientation==='vertical'?'horizontal':'vertical'" @pointerdown="resizeSplitter" /><div class="widget-splitter-pane" :style="{flex:`${1-splitterRatio}`}" ><slot slot-id="second" /></div></div>
     <div v-else-if="isContainer(widget) && !['dialog','splitter'].includes(widget.kind) && $slots.default" class="widget-container-slot" :class="{'widget-scroll-slot':widget.kind==='scroll'}"><slot :slot-id="activeSlot" /></div>
   </div>

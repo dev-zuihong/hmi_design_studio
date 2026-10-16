@@ -40,6 +40,14 @@ Python 及协议插件以当前用户权限执行，面向可信项目，不是�
 
 ## 构建交付
 
+PTB 示例使用通用组件和可编辑流程复现设备工作台、六页设置及 C1–C7 协议。Windows x64 构建需额外安装 .NET 10 SDK 与 NativeAOT 工具链：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-ptb-demo.ps1
+```
+
+输出 `ING-PTB.hmiproj` 和 `ING-PTB-win-x64.zip`，默认模拟三台设备。完整解压运行包后启动 `HmiRunner.exe`；停止会话后可在连接设置中明确选择 USB 模式。目标机器无需 .NET 或 Python。示例源、组件接口、文件导入导出及实际硬件验收边界见 [PTB 使用说明](docs/ING-PTB.md)。
+
 ```powershell
 npm run build:desktop
 ```

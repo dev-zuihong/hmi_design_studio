@@ -1,0 +1,37 @@
+{
+  "version": 4,
+  "targetChip": 2,
+  "burnMode": 1,
+  "eraseMode": 0,
+  "clearLock": false,
+  "lockEnabled": false,
+  "tvccVoltage": 3.3,
+  "burnCount": 0,
+  "postAction": 0,
+  "firmwareFunction": 0,
+  "rf": {
+    "enabled": true,
+    "frequencyMhz": 2402,
+    "txPower": -35,
+    "rxPower": -35,
+    "packetCount": 100,
+    "txPassCount": 80,
+    "rxPassCount": 80,
+    "delayMilliseconds": 0,
+    "frequencyOffsetAddress": 34074624
+  },
+  "rollingCode": {
+    "enabled": false,
+    "mode": 0,
+    "byteLength": 8,
+    "step": 1,
+    "bitmask": 15,
+    "initialValue": 0,
+    "initialValueHex": "",
+    "address": 34070528
+  },
+  "firmware": [],
+  "dutTargetChip": 2,
+  "dutFirmwareAddress": 33562624,
+  "dutFirmware": null
+}

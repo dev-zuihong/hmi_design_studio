@@ -2,6 +2,19 @@ import type { CSSProperties } from 'vue'
 import type { LayoutItem, LayoutSpec, Page, Widget } from './model'
 import { widgetKinds } from './model'
 
+export const inputWidgetKinds = ['input','textarea','switch','select','checkbox','radio','spinbox','slider','date','time','datetime','table','tabs','stack','file-picker','byte-range']
+/** Context substitutions are path segments, so device keys containing dots stay intact. */
+export function resolveRuntimePath(value: unknown, path = '', context: Record<string, unknown> = {}): unknown {
+  if (!path) return value
+  let result: any = value
+  for (const segment of path.split('.')) {
+    const key = segment.startsWith('$') ? context[segment.slice(1)] : segment
+    if ((typeof key !== 'string' && typeof key !== 'number') || ['__proto__','prototype','constructor'].includes(String(key)) || result === null || typeof result !== 'object' || !Object.prototype.hasOwnProperty.call(result, key)) return undefined
+    result = result[key]
+  }
+  return result
+}
+
 export function getRootWidgets(page: Page): Widget[] {
   const ids = new Set(page.widgets.map(widget => widget.id))
   return page.widgets.filter(widget => !widget.parentId || !ids.has(widget.parentId))

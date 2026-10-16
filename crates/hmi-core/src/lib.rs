@@ -1,3 +1,4 @@
+pub mod backend;
 pub mod connection;
 pub mod error;
 pub mod framing;
@@ -5,6 +6,9 @@ pub mod model;
 pub mod protocol;
 pub mod runtime;
 mod schema;
+pub use backend::{
+    load_backend_manifest, BackendEvent, BackendManager, BackendManifest, BackendResource,
+};
 pub use connection::{list_serial_ports, ConnectionManager, SerialPortInfo};
 pub use error::{CoreError, CoreResult};
 pub use model::*;

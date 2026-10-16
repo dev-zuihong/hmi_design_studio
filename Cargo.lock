@@ -1282,6 +1282,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures-util",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
@@ -1290,11 +1291,12 @@ dependencies = [
  "tokio-serial",
  "tokio-util",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "hmi-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1332,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-runner"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hmi-desktop",
  "tauri",
@@ -1342,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-studio"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hmi-desktop",
  "tauri",

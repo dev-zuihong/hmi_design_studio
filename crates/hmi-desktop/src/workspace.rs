@@ -806,7 +806,7 @@ async fn apply_batch_guarded(
     }
     let project: Project =
         serde_json::from_value(candidate.clone()).map_err(|e| format!("项目结构无效: {e}"))?;
-    if ![1, 2].contains(&project.schema_version) {
+    if ![1, 2, 3].contains(&project.schema_version) {
         return Err("不支持此项目格式版本".into());
     }
     inner.project = candidate;
@@ -958,7 +958,7 @@ pub async fn replace_workspace(
 ) -> Result<WorkspaceState> {
     let project: Project =
         serde_json::from_value(project).map_err(|e| format!("项目结构无效: {e}"))?;
-    if ![1, 2].contains(&project.schema_version) {
+    if ![1, 2, 3].contains(&project.schema_version) {
         return Err("不支持此项目格式版本".into());
     }
     let path = path.map(PathBuf::from);
@@ -1074,7 +1074,7 @@ fn copy_tree_safe(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn stage_project_dependencies(
+pub(crate) fn stage_project_dependencies(
     project: &Project,
     workspace_root: &Path,
     shared_root: &Path,
@@ -1083,6 +1083,33 @@ fn stage_project_dependencies(
     let mut missing = Vec::new();
     let target = hmi_core::host_target();
     let mut plugin_ids = HashSet::new();
+    for backend in &project.backends {
+        if !hmi_core::safe_identifier(&backend.provider_id) {
+            missing.push(format!("backend:{}", backend.provider_id));
+            continue;
+        }
+        let destination = workspace_root
+            .join("backends")
+            .join(target)
+            .join(&backend.provider_id);
+        if destination.is_dir() {
+            continue;
+        }
+        let scoped = shared_root
+            .join("backends")
+            .join(target)
+            .join(&backend.provider_id);
+        let source = if scoped.is_dir() {
+            scoped
+        } else {
+            shared_root.join("backends").join(&backend.provider_id)
+        };
+        if source.is_dir() {
+            copy_tree_safe(&source, &destination)?;
+        } else {
+            missing.push(format!("backend:{}", backend.provider_id));
+        }
+    }
     for connection in &project.connections {
         if !plugin_ids.insert(connection.protocol_id.as_str()) {
             continue;

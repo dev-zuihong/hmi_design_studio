@@ -14,7 +14,7 @@ const fingerprint=(value:unknown)=>JSON.stringify(value,(_key,entry)=>entry&&typ
 function protectReferences(project:Project,operations:WorkspaceOperation[]){
   const removed=new Set(operations.filter(operation=>!operation.afterExists&&operation.beforeExists&&operation.before&&typeof operation.before==='object'&&'id' in operation.before).map(operation=>(operation.before as {id:string}).id))
   if(!removed.size)return
-  function visit(value:any,path:string[]=[]){if(!value||typeof value!=='object')return;for(const [key,entry]of Object.entries(value)){if(typeof entry==='string'&&removed.has(entry)&&['parentId','flowId','entryNodeId','connectionId','variableId','pageId','key','source','target','actionId'].includes(key))throw Error(`撤销冲突：${path.concat(key).join('.')} 已引用另一窗口使用的对象`);visit(entry,path.concat(key))}}
+  function visit(value:any,path:string[]=[]){if(!value||typeof value!=='object')return;for(const [key,entry]of Object.entries(value)){if(typeof entry==='string'&&removed.has(entry)&&['parentId','flowId','entryNodeId','connectionId','variableId','pageId','backendId','windowId','key','source','target','actionId'].includes(key))throw Error(`撤销冲突：${path.concat(key).join('.')} 已引用另一窗口使用的对象`);visit(entry,path.concat(key))}}
   visit(project)
 }
 

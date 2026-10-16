@@ -14,3 +14,5 @@ __pycache__/
 .env.local
 *.tsbuildinfo
 apps/*/src-tauri/gen/
+backends/**/bin/
+backends/**/obj/

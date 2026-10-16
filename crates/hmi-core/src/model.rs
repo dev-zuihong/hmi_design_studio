@@ -26,6 +26,38 @@ pub struct Project {
     pub i18n: Option<I18nConfig>,
     #[serde(default)]
     pub actions: Vec<SharedAction>,
+    #[serde(default)]
+    pub backends: Vec<BackendConfig>,
+    #[serde(default)]
+    pub windows: Vec<WindowTemplate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendConfig {
+    pub id: String,
+    pub name: String,
+    pub provider_id: String,
+    pub provider_version: String,
+    pub mode: String,
+    #[serde(default)]
+    pub config: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowTemplate {
+    pub id: String,
+    pub page_id: String,
+    pub title: String,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +217,8 @@ pub struct SharedAction {
 pub enum ValueRef {
     Literal { value: Value },
     Message { path: String },
+    Context { path: String },
+    Backend { key: String, path: String },
     Variable { key: String },
     Input { key: String },
     Point { key: String },
@@ -316,6 +350,21 @@ pub fn valid_message_path(path: &str) -> bool {
         })
 }
 
+pub fn valid_backend_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 512
+        && path.split('.').all(|part| {
+            let literal = part.strip_prefix('$').unwrap_or(part);
+            !literal.is_empty()
+                && valid_message_path(literal)
+                && !literal.contains('.')
+                && (!part.starts_with('$')
+                    || literal
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        })
+}
+
 pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     let mut issue = |path: String, message: &str| {
@@ -325,7 +374,7 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
             message: message.into(),
         })
     };
-    if ![1, 2].contains(&project.schema_version) {
+    if ![1, 2, 3].contains(&project.schema_version) {
         issue("schemaVersion".into(), "不支持此项目格式版本");
     }
     if !safe_identifier(&project.id) {
@@ -368,7 +417,46 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
     for (i, action) in project.actions.iter().enumerate() {
         check_id(&action.id, format!("actions[{i}].id"));
     }
+    for (i, backend) in project.backends.iter().enumerate() {
+        check_id(&backend.id, format!("backends[{i}].id"));
+    }
+    for (i, window) in project.windows.iter().enumerate() {
+        check_id(&window.id, format!("windows[{i}].id"));
+    }
     drop(check_id);
+    if project.schema_version < 3 && (!project.backends.is_empty() || !project.windows.is_empty()) {
+        issue("schemaVersion".into(), "后端与窗口模板需要工程格式版本 3");
+    }
+    let backends: HashSet<&str> = project.backends.iter().map(|b| b.id.as_str()).collect();
+    for (i, backend) in project.backends.iter().enumerate() {
+        if !safe_identifier(&backend.provider_id)
+            || backend.provider_version.trim().is_empty()
+            || !["simulation", "usb"].contains(&backend.mode.as_str())
+        {
+            issue(format!("backends[{i}]"), "后端提供程序、版本或模式无效");
+        }
+    }
+    for (i, window) in project.windows.iter().enumerate() {
+        if !project.pages.iter().any(|p| p.id == window.page_id)
+            || [
+                Some(window.width),
+                Some(window.height),
+                window.min_width,
+                window.min_height,
+            ]
+            .iter()
+            .flatten()
+            .any(|v| !v.is_finite() || *v <= 0.0)
+            || window.min_width.is_some_and(|v| window.width < v)
+            || window.min_height.is_some_and(|v| window.height < v)
+            || window
+                .instance_key
+                .as_deref()
+                .is_some_and(|v| !valid_message_path(v))
+        {
+            issue(format!("windows[{i}]"), "窗口页面、尺寸或实例键无效");
+        }
+    }
     let vars: HashSet<&str> = project.variables.iter().map(|v| v.id.as_str()).collect();
     let connections: HashSet<&str> = project.connections.iter().map(|v| v.id.as_str()).collect();
     let pages: HashSet<&str> = project.pages.iter().map(|v| v.id.as_str()).collect();
@@ -427,6 +515,10 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
     let check_ref = |value: &ValueRef| match value {
         ValueRef::Literal { .. } => true,
         ValueRef::Message { path } => valid_message_path(path),
+        ValueRef::Context { path } => valid_message_path(path),
+        ValueRef::Backend { key, path } => {
+            backends.contains(key.as_str()) && valid_backend_path(path)
+        }
         ValueRef::Variable { key } => vars.contains(key.as_str()),
         ValueRef::Input { key } => widgets.contains(key.as_str()),
         ValueRef::Point { key } => valid_point(key),
@@ -464,6 +556,9 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
                 "text",
                 "button",
                 "input",
+                "file-picker",
+                "byte-range",
+                "memory-map",
                 "number",
                 "select",
                 "switch",
@@ -694,6 +789,25 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
                     number("intervalMs").is_some_and(|v| (100..=86_400_000).contains(&v))
                 }
                 "trigger.data" => text("key").is_some_and(valid_point),
+                "trigger.backend" => {
+                    text("backendId").is_some_and(|id| backends.contains(id))
+                        && text("event").map_or(true, |v| !v.is_empty())
+                }
+                "backend.invoke" | "window.open" | "window.close" | "window.focus"
+                | "file.open" | "file.save" => {
+                    (n.kind != "backend.invoke"
+                        || (text("backendId").is_some_and(|id| backends.contains(id))
+                            && text("operation").is_some_and(|v| !v.trim().is_empty())))
+                        && n.config.get("args").map_or(true, |v| {
+                            v.as_object().is_some_and(|args| {
+                                args.values().all(|v| {
+                                    serde_json::from_value::<ValueRef>(v.clone())
+                                        .ok()
+                                        .is_some_and(|r| check_ref(&r))
+                                })
+                            })
+                        })
+                }
                 "connection.open" | "connection.close" => {
                     text("connectionId").is_some_and(|id| connections.contains(id))
                 }

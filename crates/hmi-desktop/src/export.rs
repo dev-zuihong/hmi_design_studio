@@ -102,6 +102,19 @@ pub fn package_with_project_resources(
         crate::session::check_plugin(&resource_root.join("plugins").join(id))?;
     }
     let mut export_project = project.clone();
+    let providers: BTreeSet<_> = project
+        .backends
+        .iter()
+        .map(|backend| backend.provider_id.as_str())
+        .collect();
+    for id in providers {
+        if !hmi_core::safe_identifier(id) {
+            return Err("后端 ID 无效".into());
+        }
+        let destination = resource_root.join("backends").join(id);
+        copy_tree(&project_resources.backends().join(id), &destination)?;
+        crate::session::check_backend(&destination)?;
+    }
     crate::session::pin_plugins(project_resources, &mut export_project)?;
     for asset in &mut export_project.assets {
         if !hmi_core::safe_identifier(&asset.id) {

@@ -16,7 +16,7 @@ export function checkConnection(flow: Flow, edge: Omit<FlowEdge, 'id'>): string 
 
 export function parseProject(text: string): Project {
   const value = JSON.parse(text)
-  if (!value || ![1, 2].includes(value.schemaVersion)) throw new Error('不支持的项目格式版本；当前支持版本 1 和 2')
+  if (!value || ![1, 2, 3].includes(value.schemaVersion)) throw new Error('不支持的项目格式版本；当前支持版本 1、2 和 3')
   if (typeof value.id !== 'string' || typeof value.name !== 'string' || !Number.isFinite(value.width) || !Number.isFinite(value.height) || value.width < 100 || value.height < 100) throw new Error('项目名称或画布尺寸无效')
   for (const key of ['pages', 'connections', 'variables', 'flows']) if (!Array.isArray(value[key])) throw new Error(`项目缺少 ${key}`)
   if (!value.pages.length || value.pages.some((page: any) => !page.id || !Array.isArray(page.widgets))) throw new Error('项目至少需要一个有效页面')
@@ -25,7 +25,7 @@ export function parseProject(text: string): Project {
   }
   if (value.flows.some((flow: any) => !flow.id || !Array.isArray(flow.nodes) || !Array.isArray(flow.edges))) throw new Error('流程格式无效')
   const legacy = value.schemaVersion === 1
-  value.schemaVersion = 2
+  value.schemaVersion = Math.max(2, value.schemaVersion)
   for (const page of value.pages) { page.layout ??= { type: 'absolute' }; page.responsive ??= !legacy; page.guides ??= [] }
   value.i18n ??= { defaultLocale: 'zh-CN', locales: ['zh-CN', 'en-US'], messages: { 'zh-CN': {}, 'en-US': {} } }
   value.actions ??= []

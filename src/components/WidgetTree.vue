@@ -20,7 +20,7 @@ onBeforeUnmount(()=>window.removeEventListener('keydown',onShortcut,true))
 </script>
 <template>
   <div class="widget-tree-root" :style="layoutStyle(parentLayout)">
-    <div v-for="widget in roots" :key="widget.id" class="runtime-widget" :style="boxStyle(widget)">
+    <div v-for="widget in roots" :key="widget.id" class="runtime-widget" :data-widget-id="widget.id" :style="boxStyle(widget)">
       <WidgetView :widget="widget" :project="project" :snapshot="snapshot" :events="events" :editing="editing" :locale="locale" @action="(action,value)=>emit('action',action,value)" @input="(id,value)=>emit('input',id,value)" @selection="(id,value)=>emit('selection',id,value)">
         <template #default="{slotId}"><WidgetTree :project="project" :page-id="page.id" :widgets="children(widget,slotId)" :snapshot="snapshot" :events="events" :editing="editing" :locale="locale" @action="(action,value)=>emit('action',action,value)" @input="(id,value)=>emit('input',id,value)" @selection="(id,value)=>emit('selection',id,value)" /></template>
       </WidgetView>
