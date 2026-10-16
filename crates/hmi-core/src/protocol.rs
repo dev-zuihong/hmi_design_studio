@@ -45,6 +45,33 @@ fn default_target() -> String {
     "x86_64-pc-windows-msvc".into()
 }
 
+/// Return the Rust target triple this core was compiled for.
+///
+/// Protocol plugins are native processes, so their manifest target must match
+/// this value exactly before the executable can be used.
+pub fn host_target() -> &'static str {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", target_env = "msvc"))]
+    {
+        "x86_64-pc-windows-msvc"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        "aarch64-apple-darwin"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        "x86_64-apple-darwin"
+    }
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64", target_env = "msvc"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+    )))]
+    {
+        "unsupported"
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandDescriptor {
@@ -78,7 +105,7 @@ pub fn load_plugin_manifest(path: &Path) -> CoreResult<PluginManifest> {
     if manifest.api_version != 1
         || !crate::safe_identifier(&manifest.id)
         || manifest.version.is_empty()
-        || manifest.target != "x86_64-pc-windows-msvc"
+        || manifest.target != host_target()
         || !safe_relative_path(&manifest.executable)
     {
         return Err(CoreError::new(
@@ -110,6 +137,72 @@ pub fn safe_relative_path(path: &str) -> bool {
         && !path.starts_with(['/', '\\'])
         && !path.contains(':')
         && !path.split(['/', '\\']).any(|p| p == ".." || p.is_empty())
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::{host_target, load_plugin_manifest};
+    use serde_json::{json, Value};
+    use std::fs;
+
+    fn write_manifest(target: Option<&str>) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let mut manifest = json!({
+            "id": "test-protocol",
+            "name": "Test protocol",
+            "version": "1.0.0",
+            "apiVersion": 1,
+            "executable": "bin/plugin",
+            "configSchema": {"type": "object"},
+            "commands": [],
+            "points": []
+        });
+        if let Some(target) = target {
+            manifest["target"] = Value::String(target.to_owned());
+        }
+        fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn host_target_is_one_of_the_supported_native_process_targets() {
+        assert!(matches!(
+            host_target(),
+            "x86_64-pc-windows-msvc" | "aarch64-apple-darwin" | "x86_64-apple-darwin"
+        ));
+    }
+
+    #[test]
+    fn manifest_target_must_exactly_match_the_host() {
+        let (_dir, path) = write_manifest(Some(host_target()));
+        assert!(load_plugin_manifest(&path).is_ok());
+
+        for target in [
+            "x86_64-pc-windows-msvc",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+        ] {
+            if target == host_target() {
+                continue;
+            }
+            let (_dir, path) = write_manifest(Some(target));
+            assert!(
+                load_plugin_manifest(&path).is_err(),
+                "accepted foreign target {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_target_keeps_the_legacy_windows_default_only_on_windows() {
+        let (_dir, path) = write_manifest(None);
+        if host_target() == "x86_64-pc-windows-msvc" {
+            assert!(load_plugin_manifest(&path).is_ok());
+        } else {
+            assert!(load_plugin_manifest(&path).is_err());
+        }
+    }
 }
 
 pub fn discover_plugins(root: &Path) -> CoreResult<Vec<PluginManifest>> {

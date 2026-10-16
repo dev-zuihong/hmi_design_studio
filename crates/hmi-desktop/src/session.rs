@@ -15,7 +15,9 @@ use tokio_util::sync::CancellationToken;
 
 pub struct Session {
     pub runtime: Arc<Runtime>,
-    pub connections: Arc<ConnectionManager>,
+    connections: Arc<ConnectionManager>,
+    services: Arc<Services>,
+    resources: tokio::sync::RwLock<Resources>,
     pub cancel: CancellationToken,
     bridge_cancel: CancellationToken,
     bridge: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -24,7 +26,7 @@ pub struct Session {
 }
 struct Services {
     connections: Arc<ConnectionManager>,
-    python: Option<PythonExecutor>,
+    python: tokio::sync::RwLock<Option<PythonExecutor>>,
     runtime: Mutex<Weak<Runtime>>,
 }
 #[async_trait]
@@ -66,7 +68,9 @@ impl HostServices for Services {
     ) -> CoreResult<Option<Value>> {
         let executor = self
             .python
-            .as_ref()
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| CoreError::new("PYTHON_MISSING", "未加载项目 Python 环境"))?;
         let result = executor
             .execute(
@@ -97,7 +101,7 @@ impl Session {
         let connections = ConnectionManager::new(project.connections.clone(), resources.plugins());
         let host = Arc::new(Services {
             connections: connections.clone(),
-            python,
+            python: tokio::sync::RwLock::new(python),
             runtime: Mutex::new(Weak::new()),
         });
         let runtime = Runtime::new(project, host.clone()).map_err(error)?;
@@ -136,6 +140,8 @@ impl Session {
         Ok(Arc::new(Self {
             runtime,
             connections,
+            services: host,
+            resources: tokio::sync::RwLock::new(resources),
             cancel: CancellationToken::new(),
             bridge_cancel,
             bridge: tokio::sync::Mutex::new(Some(bridge)),
@@ -146,11 +152,148 @@ impl Session {
     pub async fn add_event_forwarder(&self, task: tokio::task::JoinHandle<()>) {
         self.forwarders.lock().await.push(task);
     }
+
+    pub async fn connection_manager(&self) -> Arc<ConnectionManager> {
+        self.connections.clone()
+    }
+
+    pub async fn current_resources(&self) -> Resources {
+        self.resources.read().await.clone()
+    }
+
+    pub fn requires_resource_barrier(&self, project: &Project) -> bool {
+        let previous = self.runtime.project();
+        let old_connections = serde_json::to_value(&previous.connections).ok();
+        let new_connections = serde_json::to_value(&project.connections).ok();
+        let old_python = serde_json::to_value(&previous.python).ok();
+        let new_python = serde_json::to_value(&project.python).ok();
+        let variable_changed = previous.variables.iter().any(|old| {
+            project
+                .variables
+                .iter()
+                .find(|new| new.id == old.id)
+                .is_none_or(|new| new.value_type != old.value_type || new.options != old.options)
+        });
+        old_connections != new_connections || old_python != new_python || variable_changed
+    }
+
+    pub async fn apply_revision(
+        &self,
+        project: Project,
+        resources: Resources,
+    ) -> Result<&'static str> {
+        let issues = validate(&resources, &project).await;
+        if let Some(issue) = issues.iter().find(|issue| issue.severity == "error") {
+            return Err(format!("{}: {}", issue.path, issue.message));
+        }
+        let new_python = check_python(&resources, &project).await?;
+        let old_project = self.runtime.project();
+        let old_resources = self.resources.read().await.clone();
+        let old_connections = serde_json::to_value(&old_project.connections).map_err(error)?
+            != serde_json::to_value(&project.connections).map_err(error)?;
+        let old_python = serde_json::to_value(&old_project.python).map_err(error)?;
+        let new_python_value = serde_json::to_value(&project.python).map_err(error)?;
+        let variable_resources_changed = old_project.variables.iter().any(|old| {
+            project
+                .variables
+                .iter()
+                .find(|new| new.id == old.id)
+                .is_none_or(|new| new.value_type != old.value_type || new.options != old.options)
+        });
+        let resource_change =
+            old_connections || old_python != new_python_value || variable_resources_changed;
+        if !resource_change {
+            self.connections
+                .reconfigure(project.connections.clone(), resources.plugins())
+                .await
+                .map_err(error)?;
+            self.runtime
+                .apply_project_revision(project)
+                .map_err(error)?;
+            *self.services.python.write().await = new_python;
+            *self.resources.write().await = resources;
+            self.runtime.finish_revision_barrier();
+            return Ok("applied");
+        }
+
+        self.runtime.begin_revision_barrier();
+        self.runtime.wait_for_runs().await;
+        let manager = self.connection_manager().await;
+        let old_snapshot = self.runtime.snapshot().await;
+        let old_open: std::collections::HashSet<String> = old_snapshot
+            .connections
+            .iter()
+            .filter_map(|(id, state)| {
+                (state.get("status").and_then(Value::as_str) == Some("open")).then(|| id.clone())
+            })
+            .collect();
+        let changed = match manager
+            .reconfigure(project.connections.clone(), resources.plugins())
+            .await
+        {
+            Ok(changed) => changed,
+            Err(change_error) => {
+                self.runtime.finish_revision_barrier();
+                return Err(error(change_error));
+            }
+        };
+        *self.services.python.write().await = new_python;
+        *self.resources.write().await = resources.clone();
+        if let Err(update_error) = self.runtime.apply_project_revision(project.clone()) {
+            let rollback_changed = manager
+                .reconfigure(old_project.connections.clone(), old_resources.plugins())
+                .await
+                .map_err(error)?;
+            *self.services.python.write().await =
+                check_python(&old_resources, &old_project).await?;
+            *self.resources.write().await = old_resources;
+            for id in rollback_changed {
+                if old_open.contains(&id) {
+                    let _ = manager.open(&id).await;
+                }
+            }
+            self.runtime.finish_revision_barrier();
+            return Err(error(update_error));
+        }
+        for id in changed {
+            if project
+                .connections
+                .iter()
+                .any(|connection| connection.id == id)
+            {
+                if old_open.contains(&id) {
+                    if let Err(open_error) = manager.open(&id).await {
+                        let rollback_changed = manager
+                            .reconfigure(old_project.connections.clone(), old_resources.plugins())
+                            .await
+                            .map_err(error)?;
+                        *self.services.python.write().await =
+                            check_python(&old_resources, &old_project).await?;
+                        *self.resources.write().await = old_resources;
+                        self.runtime
+                            .apply_project_revision((*old_project).clone())
+                            .map_err(error)?;
+                        for old_id in rollback_changed {
+                            if old_open.contains(&old_id) {
+                                let _ = manager.open(&old_id).await;
+                            }
+                        }
+                        self.runtime.finish_revision_barrier();
+                        return Err(format!("资源切换失败，已恢复上一版: {open_error}"));
+                    }
+                }
+            }
+        }
+        self.runtime.finish_revision_barrier();
+        Ok("applied")
+    }
+
     pub async fn stop(&self) {
         let _stopping = self.stopping.lock().await;
         self.runtime.stop().await;
-        for connection in self.connections.configs() {
-            let _ = self.connections.close(&connection.id).await;
+        let connections = self.connection_manager().await;
+        for connection in connections.configs() {
+            let _ = connections.close(&connection.id).await;
         }
         self.bridge_cancel.cancel();
         let bridge = self.bridge.lock().await.take();
@@ -199,7 +342,7 @@ pub fn check_plugin(directory: &Path) -> Result<()> {
         return Err("非法插件 ID".into());
     }
     let executable = contained_file(directory, &manifest.executable)?;
-    check_amd64(&executable)?;
+    check_native_binary(&executable)?;
     Ok(())
 }
 pub async fn validate(resources: &Resources, project: &Project) -> Vec<ValidationIssue> {
@@ -412,8 +555,11 @@ pub fn pin_python(resources: &Resources, project: &mut Project) -> Result<()> {
     } // Editing remains possible before resources are imported.
     let lock = read_json(&path.join("dependencies.lock.json"))?;
     if let Some(python) = &mut project.python {
+        if python.runtime_id != hmi_python::runtime_id() {
+            return Ok(()); // Cross-platform projects stay editable until resources are explicitly imported.
+        }
         if python.runtime_sha256.is_none() {
-            python.runtime_sha256 = Some(hmi_python::ARCHIVE_SHA256.into());
+            python.runtime_sha256 = Some(hmi_python::archive_sha256().into());
             python.dependency_lock =
                 serde_json::from_value(lock["packages"].clone()).map_err(error)?;
         }

@@ -14,10 +14,21 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(windows)]
+#[path = "process/windows.rs"]
+mod process;
+#[cfg(target_os = "macos")]
+#[path = "process/macos.rs"]
 mod process;
 
 pub const PYTHON_VERSION: &str = "3.14.8";
+#[cfg(windows)]
 pub const ARCHIVE_SHA256: &str = "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub const ARCHIVE_SHA256: &str = "709f419d175eb015f810b68aa54bdae1d776c9824cb362aa701c93b0a9f2a9e7";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub const ARCHIVE_SHA256: &str = "e09bce050cf075e777d1a802c4a11b6d43d54291b5f76911887173b28ad9c9fd";
+#[cfg(not(any(windows, target_os = "macos")))]
+pub const ARCHIVE_SHA256: &str = "unsupported";
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +41,8 @@ pub enum PythonError {
     Cancelled,
     #[error("Python execution exceeded its wall-clock limit")]
     Timeout,
+    #[error("Python process exceeded its configured memory limit")]
+    MemoryLimit,
     #[error("Python process failed: {0}")]
     Process(String),
     #[error("Python code failed: {message}\n{logs}")]
@@ -63,25 +76,76 @@ impl PythonEnvironment {
             &fs::read(root.join("runtime-manifest.json")).map_err(environment_error)?,
         )
         .map_err(environment_error)?;
+        #[cfg(windows)]
+        let (expected_platform, _executable, required, lock_platform) = (
+            "win_amd64",
+            "python.exe",
+            [
+                "python.exe",
+                "python314.dll",
+                "python314.zip",
+                "python314._pth",
+                "executor/worker.py",
+                "dependencies.lock.json",
+            ],
+            "win_amd64",
+        );
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let (expected_platform, _executable, required, lock_platform) = (
+            "aarch64-apple-darwin",
+            "bin/python3.14",
+            [
+                "bin/python3.14",
+                "lib/libpython3.14.dylib",
+                "lib/python3.14",
+                "executor/worker.py",
+                "dependencies.lock.json",
+            ],
+            "aarch64-apple-darwin",
+        );
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        let (expected_platform, _executable, required, lock_platform) = (
+            "x86_64-apple-darwin",
+            "bin/python3.14",
+            [
+                "bin/python3.14",
+                "lib/libpython3.14.dylib",
+                "lib/python3.14",
+                "executor/worker.py",
+                "dependencies.lock.json",
+            ],
+            "x86_64-apple-darwin",
+        );
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let (expected_platform, _executable, required, lock_platform) = (
+            "unsupported",
+            "python",
+            [
+                "python",
+                "executor/worker.py",
+                "dependencies.lock.json",
+                "",
+                "",
+            ],
+            "unsupported",
+        );
         if manifest.schema_version != 1
             || manifest.version != PYTHON_VERSION
-            || manifest.platform != "win_amd64"
+            || manifest.platform != expected_platform
             || manifest.abi != "cp314"
             || manifest.archive_sha256 != ARCHIVE_SHA256
         {
-            return Err(PythonError::Environment(
-                "Expected the pinned CPython 3.14.8 / cp314 / win_amd64 distribution".into(),
-            ));
+            return Err(PythonError::Environment(format!(
+                "Expected the pinned CPython 3.14.8 / cp314 / {expected_platform} distribution"
+            )));
         }
-        for required in [
-            "python.exe",
-            "python314.dll",
-            "python314.zip",
-            "python314._pth",
-            "executor/worker.py",
-            "dependencies.lock.json",
-        ] {
-            if !manifest.files.contains_key(required) {
+        for required in required {
+            if !manifest.files.contains_key(required)
+                && !manifest
+                    .files
+                    .keys()
+                    .any(|name| name.starts_with(&format!("{required}/")))
+            {
                 return Err(PythonError::Environment(format!(
                     "Manifest missing {required}"
                 )));
@@ -120,6 +184,7 @@ impl PythonEnvironment {
                     "SHA-256 mismatch: {relative}"
                 )));
             }
+            #[cfg(windows)]
             if path
                 .extension()
                 .and_then(|value| value.to_str())
@@ -132,6 +197,23 @@ impl PythonEnvironment {
             {
                 verify_amd64(&mut file, relative)?;
             }
+            #[cfg(target_os = "macos")]
+            if path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|ext| matches!(ext, "dylib" | "so"))
+                || *relative == _executable
+            {
+                verify_macho(
+                    &mut file,
+                    relative,
+                    if cfg!(target_arch = "aarch64") {
+                        0x0100000c
+                    } else {
+                        0x01000007
+                    },
+                )?;
+            }
         }
         let mut actual_files = BTreeSet::new();
         collect_files(&root, &root, &mut actual_files)?;
@@ -141,12 +223,15 @@ impl PythonEnvironment {
                 "Runtime contains files outside its locked manifest".into(),
             ));
         }
+        #[cfg(windows)]
         let paths = fs::read_to_string(root.join("python314._pth")).map_err(environment_error)?;
+        #[cfg(windows)]
         let effective: Vec<_> = paths
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .collect();
+        #[cfg(windows)]
         if effective != ["python314.zip", ".", "executor", "dependencies"] {
             return Err(PythonError::Environment(
                 "Unexpected Python search paths or site initialization".into(),
@@ -158,7 +243,7 @@ impl PythonEnvironment {
         .map_err(environment_error)?;
         if lock["schemaVersion"] != 1
             || lock["pythonVersion"] != PYTHON_VERSION
-            || lock["platform"] != "win_amd64"
+            || lock["platform"] != lock_platform
             || lock["abi"] != "cp314"
             || !lock["packages"].is_array()
         {
@@ -178,6 +263,109 @@ impl PythonEnvironment {
     pub fn root(&self) -> &Path {
         &self.root
     }
+
+    pub fn runtime_id(&self) -> String {
+        format!("{}-{}", self.manifest.version, self.manifest.platform)
+    }
+
+    pub fn executable(&self) -> PathBuf {
+        #[cfg(windows)]
+        let relative = "python.exe";
+        #[cfg(target_os = "macos")]
+        let relative = "bin/python3.14";
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let relative = "python";
+        self.root.join(relative)
+    }
+}
+
+pub fn runtime_platform() -> &'static str {
+    #[cfg(windows)]
+    {
+        "win_amd64"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        "aarch64-apple-darwin"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        "x86_64-apple-darwin"
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        "unsupported"
+    }
+}
+
+pub fn runtime_id() -> String {
+    format!("{PYTHON_VERSION}-{}", runtime_platform())
+}
+
+pub fn archive_sha256() -> &'static str {
+    ARCHIVE_SHA256
+}
+
+#[cfg(target_os = "macos")]
+fn verify_macho(file: &mut fs::File, name: &str, expected_cpu: u32) -> Result<(), PythonError> {
+    file.seek(SeekFrom::Start(0)).map_err(environment_error)?;
+    let mut header = [0_u8; 8];
+    file.read_exact(&mut header).map_err(environment_error)?;
+    let magic_be = u32::from_be_bytes(header[..4].try_into().expect("four bytes"));
+    if matches!(magic_be, 0xcafebabe | 0xcafebabf | 0xbebafeca | 0xbfbafeca) {
+        let little = matches!(magic_be, 0xbebafeca | 0xbfbafeca);
+        let count = if little {
+            u32::from_le_bytes(header[4..8].try_into().expect("four bytes"))
+        } else {
+            u32::from_be_bytes(header[4..8].try_into().expect("four bytes"))
+        };
+        let entry_size = if matches!(magic_be, 0xcafebabf | 0xbfbafeca) {
+            32_u64
+        } else {
+            20_u64
+        };
+        if count > 64 {
+            return Err(PythonError::Environment(format!(
+                "Invalid universal Mach-O binary: {name}"
+            )));
+        }
+        let mut found = false;
+        for index in 0..count {
+            file.seek(SeekFrom::Start(8 + u64::from(index) * entry_size))
+                .map_err(environment_error)?;
+            let mut cpu_bytes = [0_u8; 4];
+            file.read_exact(&mut cpu_bytes).map_err(environment_error)?;
+            let cpu = if little {
+                u32::from_le_bytes(cpu_bytes)
+            } else {
+                u32::from_be_bytes(cpu_bytes)
+            };
+            found |= cpu == expected_cpu;
+        }
+        if found {
+            return Ok(());
+        }
+        return Err(PythonError::Environment(format!(
+            "Unexpected universal Mach-O architecture: {name}"
+        )));
+    }
+    let little_endian = matches!(magic_be, 0xcefaedfe | 0xcffaedfe);
+    let magic = if little_endian {
+        u32::from_le_bytes(header[..4].try_into().expect("four bytes"))
+    } else {
+        magic_be
+    };
+    let cpu = if little_endian {
+        u32::from_le_bytes(header[4..8].try_into().expect("four bytes"))
+    } else {
+        u32::from_be_bytes(header[4..8].try_into().expect("four bytes"))
+    };
+    if !matches!(magic, 0xfeedface | 0xfeedfacf) || cpu != expected_cpu {
+        return Err(PythonError::Environment(format!(
+            "Unexpected Mach-O architecture: {name}"
+        )));
+    }
+    Ok(())
 }
 
 fn collect_files(
@@ -194,8 +382,14 @@ fn collect_files(
             ));
         }
         if kind.is_dir() {
+            if entry.file_name() == "__pycache__" {
+                continue;
+            }
             collect_files(root, &entry.path(), result)?;
         } else {
+            if entry.path().extension().and_then(|ext| ext.to_str()) == Some("pyc") {
+                continue;
+            }
             result.insert(
                 entry
                     .path()
@@ -209,6 +403,7 @@ fn collect_files(
     Ok(())
 }
 
+#[cfg(windows)]
 fn verify_amd64(file: &mut fs::File, name: &str) -> Result<(), PythonError> {
     file.seek(SeekFrom::Start(0)).map_err(environment_error)?;
     let mut dos = [0_u8; 64];
@@ -238,7 +433,7 @@ fn environment_error(error: impl std::fmt::Display) -> PythonError {
 #[derive(Debug, Clone, Copy)]
 pub struct PythonLimits {
     pub timeout: Duration,
-    /// Job-wide committed virtual memory, including subprocesses; not RSS.
+    /// Windows Job committed memory. macOS samples aggregate process-group RSS; this is approximate, not a hard limit.
     pub memory_bytes: usize,
 }
 
@@ -387,7 +582,11 @@ impl PythonExecutor {
             {
                 process::run(&environment, request, limits, cancel)
             }
-            #[cfg(not(windows))]
+            #[cfg(target_os = "macos")]
+            {
+                process::run(&environment, request, limits, cancel)
+            }
+            #[cfg(not(any(windows, target_os = "macos")))]
             {
                 let _ = (environment, request, limits, cancel);
                 Err(PythonError::Environment(

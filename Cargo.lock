@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1320,6 +1320,7 @@ dependencies = [
 name = "hmi-python"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "sha2",
@@ -1331,7 +1332,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-runner"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hmi-desktop",
  "tauri",
@@ -1341,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-studio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hmi-desktop",
  "tauri",

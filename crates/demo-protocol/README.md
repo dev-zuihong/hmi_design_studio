@@ -2,7 +2,7 @@
 
 `demo-temperature` 是独立进程协议插件，版本 `1.0.0`，API 版本 `1`。它既支持 `sim://temperature` 明示模拟连接，也支持真实串口字节流。模拟不能验证物理串口、电气接线或目标硬件。
 
-构建 `cargo build -p demo-protocol --release` 后，将 `target/release/demo-protocol.exe` 与 [package/manifest.json](package/manifest.json) 放在同一个 `demo-temperature/` 目录。设计器可导入这个目录；发布程序使用 `plugins/demo-temperature/manifest.json` 定位插件。清单中的可执行文件必须是包内相对路径，API、Windows x64 架构和项目锁定版本必须匹配。
+构建 `cargo build -p demo-protocol --release` 后，将当前平台的 `demo-protocol`（Windows 为 `demo-protocol.exe`）与 [package/manifest.json](package/manifest.json) 放在同一个 `demo-temperature/` 目录。设计器可导入这个目录；发布程序使用 `plugins/demo-temperature/manifest.json` 定位插件。清单中的 `target` 必须与原生可执行文件的 Rust target triple 一致：Windows x64 为 `x86_64-pc-windows-msvc`，Apple Silicon 为 `aarch64-apple-darwin`，Intel Mac 为 `x86_64-apple-darwin`。暂存脚本会根据本机构建目标重写示例清单；API 和项目锁定版本仍须匹配。
 
 ## 宿主与插件接口
 
@@ -52,6 +52,13 @@
 
 ```powershell
 target/release/demo-protocol.exe --device COM8 --baud 115200
+```
+
+在 macOS 上可使用原生构建产物，例如：
+
+```sh
+cargo build -p demo-protocol --release
+target/release/demo-protocol --device /dev/cu.usbserial-XXXXX --baud 115200
 ```
 
 `--device-stdio` 在 stdin/stdout 上提供相同线协议，便于设备实现者做互操作测试。默认不传参数时为宿主 JSON-RPC 插件模式。串口对、驱动及电气接线须自行准备，本仓库不安装串口驱动。

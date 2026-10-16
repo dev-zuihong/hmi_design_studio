@@ -1,8 +1,43 @@
 import { describe, expect, it } from 'vitest'
+import { ref } from 'vue'
 import { checkConnection, parseProject, useEditor } from './editor'
 import { createNode, emptyProject, type Flow } from './model'
 
 describe('project editing', () => {
+  it('blocks project mutations while readonly and resumes editing when unlocked', () => {
+    const readOnly = ref(false), editor = useEditor(emptyProject(), readOnly)
+    editor.addWidget('button', 40, 50)
+    editor.addWidget('number', 100, 120)
+    const [first, second] = editor.page.value.widgets
+    editor.selected.value = [first!.id, second!.id]
+    editor.updateWidget(first!.id, { x: 72 })
+    const before = JSON.stringify(editor.project.value), past = [...editor.past.value], future = [...editor.future.value]
+
+    readOnly.value = true
+    expect(editor.readOnly).toBe(readOnly)
+    expect(editor.mutate(project => { project.name = 'blocked' })).toBe(false)
+    expect(editor.checkpoint()).toBe(false)
+    expect(editor.undo()).toBe(false)
+    expect(editor.redo()).toBe(false)
+    editor.addWidget('text')
+    editor.updateWidget(first!.id, { x: 900 })
+    editor.removeSelected()
+    editor.duplicateSelected()
+    editor.align('left')
+    expect(editor.replace(emptyProject())).toBe(false)
+    expect(JSON.stringify(editor.project.value)).toBe(before)
+    expect(editor.past.value).toEqual(past)
+    expect(editor.future.value).toEqual(future)
+
+    readOnly.value = false
+    editor.updateWidget(first!.id, { x: 88 })
+    expect(first!.x).toBe(88)
+    expect(editor.undo()).toBe(true)
+    expect(editor.page.value.widgets.find(widget => widget.id === first!.id)?.x).toBe(72)
+    expect(editor.redo()).toBe(true)
+    expect(editor.page.value.widgets.find(widget => widget.id === first!.id)?.x).toBe(88)
+  })
+
   it('restores widget geometry and selection safely through undo/redo', () => {
     const editor = useEditor(); editor.addWidget('button', 40, 50); const id = editor.selected.value[0]!
     editor.updateWidget(id, { x: 240 }); expect(editor.page.value.widgets[0]!.x).toBe(240)
@@ -17,9 +52,9 @@ describe('project editing', () => {
     second.props.text = 'changed'; expect(first.props.text).not.toBe('changed')
   })
   it('refuses malformed or unsupported files before replacing the document', () => {
-    expect(() => parseProject('{')).toThrow(); expect(() => parseProject(JSON.stringify({ ...emptyProject(), schemaVersion: 2 }))).toThrow('版本')
+    expect(() => parseProject('{')).toThrow(); expect(() => parseProject(JSON.stringify({ ...emptyProject(), schemaVersion: 99 }))).toThrow('版本')
     expect(() => parseProject(JSON.stringify({ ...emptyProject(), pages: [] }))).toThrow('页面')
-    expect(parseProject(JSON.stringify(emptyProject())).schemaVersion).toBe(1)
+    expect(parseProject(JSON.stringify(emptyProject())).schemaVersion).toBe(2)
   })
 })
 describe('flow connections', () => {

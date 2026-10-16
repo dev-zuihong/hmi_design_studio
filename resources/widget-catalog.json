@@ -1,0 +1,1112 @@
+{
+  "commonPropertyGroups": {
+    "basic": [
+      {
+        "key": "text",
+        "label": "显示文本",
+        "type": "string",
+        "default": "",
+        "translatable": true
+      },
+      {
+        "key": "enabled",
+        "label": "启用",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "visible",
+        "label": "可见",
+        "type": "boolean",
+        "default": true
+      }
+    ],
+    "appearance": [
+      {
+        "key": "fontSize",
+        "label": "字号",
+        "type": "number",
+        "default": 14
+      },
+      {
+        "key": "fontFamily",
+        "label": "字体",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "color",
+        "label": "文字颜色",
+        "type": "color",
+        "default": "#242424"
+      },
+      {
+        "key": "background",
+        "label": "背景颜色",
+        "type": "color",
+        "default": "#ffffff"
+      },
+      {
+        "key": "borderColor",
+        "label": "边框颜色",
+        "type": "color",
+        "default": "#d1d1d1"
+      },
+      {
+        "key": "borderWidth",
+        "label": "边框宽度",
+        "type": "number",
+        "default": 0
+      },
+      {
+        "key": "borderRadius",
+        "label": "圆角",
+        "type": "number",
+        "default": 4
+      },
+      {
+        "key": "padding",
+        "label": "内边距",
+        "type": "number",
+        "default": 8
+      },
+      {
+        "key": "align",
+        "label": "对齐",
+        "type": "enum",
+        "default": "left",
+        "options": [
+          "left",
+          "center",
+          "right"
+        ]
+      }
+    ]
+  },
+  "widgets": [
+    {
+      "kind": "text",
+      "label": "文本",
+      "group": "基础",
+      "icon": "Type",
+      "width": 160,
+      "height": 38,
+      "defaults": {
+        "text": "文本"
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "text",
+            "label": "文本",
+            "type": "string",
+            "translatable": true
+          }
+        ]
+      }
+    },
+    {
+      "kind": "button",
+      "label": "按钮",
+      "group": "基础",
+      "icon": "MousePointer2",
+      "width": 140,
+      "height": 40,
+      "defaults": {
+        "text": "按钮",
+        "appearance": "accent"
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "appearance",
+            "label": "按钮样式",
+            "type": "enum",
+            "options": [
+              "accent",
+              "primary",
+              "outline",
+              "subtle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "kind": "tool-button",
+      "label": "工具按钮",
+      "group": "基础",
+      "icon": "MousePointerClick",
+      "width": 44,
+      "height": 40,
+      "defaults": {
+        "text": "工具",
+        "icon": "Zap",
+        "tooltip": ""
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "icon",
+            "label": "图标",
+            "type": "string"
+          },
+          {
+            "key": "tooltip",
+            "label": "提示文本",
+            "type": "string",
+            "translatable": true
+          }
+        ]
+      }
+    },
+    {
+      "kind": "input",
+      "label": "单行输入框",
+      "group": "输入",
+      "icon": "TextCursorInput",
+      "width": 180,
+      "height": 40,
+      "defaults": {
+        "text": "请输入",
+        "value": "",
+        "placeholder": "请输入"
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "placeholder",
+            "label": "占位文本",
+            "type": "string",
+            "translatable": true
+          },
+          {
+            "key": "value",
+            "label": "初始值",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "textarea",
+      "label": "多行文本框",
+      "group": "输入",
+      "icon": "TextQuote",
+      "width": 220,
+      "height": 100,
+      "defaults": {
+        "text": "",
+        "value": "",
+        "placeholder": "请输入"
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "placeholder",
+            "label": "占位文本",
+            "type": "string",
+            "translatable": true
+          },
+          {
+            "key": "value",
+            "label": "初始值",
+            "type": "string"
+          },
+          {
+            "key": "rows",
+            "label": "行数",
+            "type": "number",
+            "default": 4
+          }
+        ]
+      }
+    },
+    {
+      "kind": "checkbox",
+      "label": "复选框",
+      "group": "输入",
+      "icon": "CheckSquare",
+      "width": 160,
+      "height": 36,
+      "defaults": {
+        "text": "复选框",
+        "value": false
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "初始选中",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "radio",
+      "label": "单选组",
+      "group": "输入",
+      "icon": "CircleDot",
+      "width": 200,
+      "height": 90,
+      "defaults": {
+        "text": "单选",
+        "value": "选项一",
+        "options": [
+          "选项一",
+          "选项二"
+        ]
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "默认选项",
+            "type": "string"
+          },
+          {
+            "key": "options",
+            "label": "选项",
+            "type": "json"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "select",
+      "label": "下拉框",
+      "group": "输入",
+      "icon": "ListFilter",
+      "width": 180,
+      "height": 40,
+      "defaults": {
+        "text": "请选择",
+        "value": "",
+        "options": [
+          "选项一",
+          "选项二"
+        ]
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "初始值",
+            "type": "string"
+          },
+          {
+            "key": "options",
+            "label": "选项",
+            "type": "json"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "switch",
+      "label": "开关",
+      "group": "输入",
+      "icon": "ToggleLeft",
+      "width": 160,
+      "height": 40,
+      "defaults": {
+        "text": "开关",
+        "value": false
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "初始状态",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "spinbox",
+      "label": "数值输入框",
+      "group": "输入",
+      "icon": "ListPlus",
+      "width": 160,
+      "height": 40,
+      "defaults": {
+        "text": "数值",
+        "value": 0,
+        "min": 0,
+        "max": 100,
+        "step": 1
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "初始值",
+            "type": "number"
+          },
+          {
+            "key": "min",
+            "label": "最小值",
+            "type": "number"
+          },
+          {
+            "key": "max",
+            "label": "最大值",
+            "type": "number"
+          },
+          {
+            "key": "step",
+            "label": "步长",
+            "type": "number"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "slider",
+      "label": "滑块",
+      "group": "输入",
+      "icon": "SlidersHorizontal",
+      "width": 200,
+      "height": 44,
+      "defaults": {
+        "text": "滑块",
+        "value": 50,
+        "min": 0,
+        "max": 100,
+        "step": 1
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "初始值",
+            "type": "number"
+          },
+          {
+            "key": "min",
+            "label": "最小值",
+            "type": "number"
+          },
+          {
+            "key": "max",
+            "label": "最大值",
+            "type": "number"
+          },
+          {
+            "key": "step",
+            "label": "步长",
+            "type": "number"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "date",
+      "label": "日期输入",
+      "group": "输入",
+      "icon": "CalendarDays",
+      "width": 170,
+      "height": 40,
+      "defaults": {
+        "text": "日期",
+        "value": ""
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "初始日期",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "time",
+      "label": "时间输入",
+      "group": "输入",
+      "icon": "Clock3",
+      "width": 150,
+      "height": 40,
+      "defaults": {
+        "text": "时间",
+        "value": ""
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "初始时间",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "datetime",
+      "label": "日期时间输入",
+      "group": "输入",
+      "icon": "CalendarClock",
+      "width": 210,
+      "height": 40,
+      "defaults": {
+        "text": "日期时间",
+        "value": ""
+      },
+      "propertyGroups": {
+        "input": [
+          {
+            "key": "value",
+            "label": "初始日期时间",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "image",
+      "label": "图片",
+      "group": "显示",
+      "icon": "Image",
+      "width": 220,
+      "height": 140,
+      "defaults": {
+        "text": "图片",
+        "fit": "contain"
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "assetId",
+            "label": "图片资源",
+            "type": "asset"
+          },
+          {
+            "key": "fit",
+            "label": "适应方式",
+            "type": "enum",
+            "options": [
+              "contain",
+              "cover",
+              "fill",
+              "none"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "kind": "number",
+      "label": "数值显示",
+      "group": "显示",
+      "icon": "Hash",
+      "width": 190,
+      "height": 110,
+      "defaults": {
+        "text": "数值",
+        "value": 0,
+        "unit": "",
+        "precision": 1
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "unit",
+            "label": "单位",
+            "type": "string",
+            "translatable": true
+          }
+        ],
+        "data": [
+          {
+            "key": "value",
+            "label": "初始值",
+            "type": "number"
+          },
+          {
+            "key": "unit",
+            "label": "单位",
+            "type": "string",
+            "translatable": true
+          },
+          {
+            "key": "precision",
+            "label": "小数位数",
+            "type": "number"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "indicator",
+      "label": "状态灯",
+      "group": "显示",
+      "icon": "CircleDot",
+      "width": 160,
+      "height": 44,
+      "defaults": {
+        "text": "状态",
+        "value": false,
+        "onColor": "#107c10",
+        "offColor": "#8a8886"
+      },
+      "propertyGroups": {
+        "data": [
+          {
+            "key": "value",
+            "label": "初始状态",
+            "type": "boolean"
+          },
+          {
+            "key": "onColor",
+            "label": "开启颜色",
+            "type": "color"
+          },
+          {
+            "key": "offColor",
+            "label": "关闭颜色",
+            "type": "color"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "progress",
+      "label": "进度条",
+      "group": "显示",
+      "icon": "Gauge",
+      "width": 220,
+      "height": 48,
+      "defaults": {
+        "text": "进度",
+        "value": 0,
+        "min": 0,
+        "max": 100,
+        "showValue": true
+      },
+      "propertyGroups": {
+        "data": [
+          {
+            "key": "value",
+            "label": "初始值",
+            "type": "number"
+          },
+          {
+            "key": "min",
+            "label": "最小值",
+            "type": "number"
+          },
+          {
+            "key": "max",
+            "label": "最大值",
+            "type": "number"
+          },
+          {
+            "key": "showValue",
+            "label": "显示百分比",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "chart",
+      "label": "实时曲线",
+      "group": "数据",
+      "icon": "ChartNoAxesCombined",
+      "width": 500,
+      "height": 240,
+      "defaults": {
+        "text": "实时曲线",
+        "value": 0,
+        "unit": ""
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "unit",
+            "label": "单位",
+            "type": "string",
+            "translatable": true
+          }
+        ],
+        "data": [
+          {
+            "key": "unit",
+            "label": "单位",
+            "type": "string",
+            "translatable": true
+          }
+        ]
+      }
+    },
+    {
+      "kind": "log",
+      "label": "日志面板",
+      "group": "数据",
+      "icon": "Logs",
+      "width": 500,
+      "height": 180,
+      "defaults": {
+        "text": "运行记录",
+        "maxLines": 100
+      },
+      "propertyGroups": {
+        "data": [
+          {
+            "key": "maxLines",
+            "label": "最大行数",
+            "type": "number"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "list",
+      "label": "列表",
+      "group": "数据",
+      "icon": "List",
+      "width": 220,
+      "height": 180,
+      "defaults": {
+        "text": "列表",
+        "items": [
+          "项目一",
+          "项目二"
+        ],
+        "value": null
+      },
+      "propertyGroups": {
+        "data": [
+          {
+            "key": "items",
+            "label": "列表数据",
+            "type": "json"
+          },
+          {
+            "key": "value",
+            "label": "选中项",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "tree",
+      "label": "树形视图",
+      "group": "数据",
+      "icon": "ListTree",
+      "width": 240,
+      "height": 200,
+      "defaults": {
+        "text": "树形视图",
+        "items": [
+          {
+            "id": "root",
+            "label": "根节点",
+            "children": [
+              {
+                "id": "child",
+                "label": "子节点"
+              }
+            ]
+          }
+        ],
+        "value": null
+      },
+      "propertyGroups": {
+        "data": [
+          {
+            "key": "items",
+            "label": "树数据",
+            "type": "json"
+          },
+          {
+            "key": "value",
+            "label": "选中项",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "table",
+      "label": "表格",
+      "group": "数据",
+      "icon": "Table",
+      "width": 460,
+      "height": 220,
+      "defaults": {
+        "text": "数据表",
+        "columns": [
+          {
+            "key": "name",
+            "title": "名称",
+            "type": "text",
+            "editable": true
+          },
+          {
+            "key": "value",
+            "title": "数值",
+            "type": "number",
+            "editable": true
+          }
+        ],
+        "rows": [
+          {
+            "id": "row_1",
+            "name": "示例",
+            "value": 0
+          }
+        ],
+        "sortable": true,
+        "selectable": true
+      },
+      "propertyGroups": {
+        "data": [
+          {
+            "key": "columns",
+            "label": "列配置",
+            "type": "json"
+          },
+          {
+            "key": "rows",
+            "label": "表格数据",
+            "type": "json"
+          },
+          {
+            "key": "sortable",
+            "label": "允许排序",
+            "type": "boolean"
+          },
+          {
+            "key": "selectable",
+            "label": "允许选择",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "group",
+      "label": "分组框",
+      "group": "容器",
+      "icon": "Square",
+      "width": 300,
+      "height": 180,
+      "container": true,
+      "slots": [
+        {
+          "id": "content",
+          "title": "内容"
+        }
+      ],
+      "defaults": {
+        "text": "分组"
+      }
+    },
+    {
+      "kind": "frame",
+      "label": "面板",
+      "group": "容器",
+      "icon": "PanelsTopLeft",
+      "width": 300,
+      "height": 180,
+      "container": true,
+      "slots": [
+        {
+          "id": "content",
+          "title": "内容"
+        }
+      ],
+      "defaults": {
+        "text": "面板"
+      }
+    },
+    {
+      "kind": "scroll",
+      "label": "滚动区",
+      "group": "容器",
+      "icon": "Scroll",
+      "width": 300,
+      "height": 180,
+      "container": true,
+      "slots": [
+        {
+          "id": "content",
+          "title": "内容"
+        }
+      ],
+      "defaults": {
+        "text": "",
+        "overflow": "auto"
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "overflow",
+            "label": "溢出行为",
+            "type": "enum",
+            "options": [
+              "auto",
+              "hidden",
+              "scroll"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "kind": "tabs",
+      "label": "选项卡",
+      "group": "容器",
+      "icon": "PanelsTopLeft",
+      "width": 360,
+      "height": 220,
+      "container": true,
+      "slots": [
+        {
+          "id": "tab_1",
+          "title": "页面一"
+        },
+        {
+          "id": "tab_2",
+          "title": "页面二"
+        }
+      ],
+      "defaults": {
+        "text": "",
+        "activeSlot": "tab_1"
+      }
+    },
+    {
+      "kind": "stack",
+      "label": "堆叠页面",
+      "group": "容器",
+      "icon": "Layers",
+      "width": 360,
+      "height": 220,
+      "container": true,
+      "slots": [
+        {
+          "id": "page_1",
+          "title": "页面一"
+        },
+        {
+          "id": "page_2",
+          "title": "页面二"
+        }
+      ],
+      "defaults": {
+        "text": "",
+        "activeSlot": "page_1"
+      }
+    },
+    {
+      "kind": "splitter",
+      "label": "分隔面板",
+      "group": "容器",
+      "icon": "Columns3",
+      "width": 420,
+      "height": 220,
+      "container": true,
+      "slots": [
+        {
+          "id": "first",
+          "title": "左侧"
+        },
+        {
+          "id": "second",
+          "title": "右侧"
+        }
+      ],
+      "defaults": {
+        "text": "",
+        "orientation": "horizontal",
+        "ratio": 0.5
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "orientation",
+            "label": "方向",
+            "type": "enum",
+            "options": [
+              "horizontal",
+              "vertical"
+            ]
+          },
+          {
+            "key": "ratio",
+            "label": "分隔比例",
+            "type": "number"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "dialog",
+      "label": "对话框容器",
+      "group": "容器",
+      "icon": "PanelsTopLeft",
+      "width": 360,
+      "height": 240,
+      "container": true,
+      "slots": [
+        {
+          "id": "content",
+          "title": "内容"
+        }
+      ],
+      "defaults": {
+        "text": "对话框",
+        "modal": true,
+        "open": true
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "modal",
+            "label": "模态窗口",
+            "type": "boolean"
+          },
+          {
+            "key": "open",
+            "label": "初始打开",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "menu",
+      "label": "菜单栏",
+      "group": "窗口",
+      "icon": "Menu",
+      "width": 360,
+      "height": 36,
+      "defaults": {
+        "text": "文件    编辑    视图",
+        "items": [],
+        "groups": [
+          {
+            "id": "menu_main",
+            "title": "菜单",
+            "actionIds": []
+          }
+        ]
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "items",
+            "label": "平铺动作",
+            "type": "json"
+          },
+          {
+            "key": "groups",
+            "label": "下拉分组",
+            "type": "json"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "toolbar",
+      "label": "工具栏",
+      "group": "窗口",
+      "icon": "PanelTop",
+      "width": 420,
+      "height": 44,
+      "defaults": {
+        "text": "",
+        "items": []
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "items",
+            "label": "工具栏动作",
+            "type": "json"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "statusbar",
+      "label": "状态栏",
+      "group": "窗口",
+      "icon": "PanelBottom",
+      "width": 420,
+      "height": 30,
+      "defaults": {
+        "text": "就绪"
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "status",
+            "label": "状态文本",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "separator",
+      "label": "分隔线",
+      "group": "基础",
+      "icon": "Minus",
+      "width": 180,
+      "height": 8,
+      "defaults": {
+        "orientation": "horizontal"
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "orientation",
+            "label": "方向",
+            "type": "enum",
+            "options": [
+              "horizontal",
+              "vertical"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "kind": "spacer",
+      "label": "弹性空白",
+      "group": "布局",
+      "icon": "MoveHorizontal",
+      "width": 80,
+      "height": 24,
+      "defaults": {
+        "orientation": "horizontal",
+        "flex": 1
+      },
+      "propertyGroups": {
+        "content": [
+          {
+            "key": "orientation",
+            "label": "方向",
+            "type": "enum",
+            "options": [
+              "horizontal",
+              "vertical"
+            ]
+          },
+          {
+            "key": "flex",
+            "label": "伸缩权重",
+            "type": "number"
+          }
+        ]
+      }
+    }
+  ]
+}

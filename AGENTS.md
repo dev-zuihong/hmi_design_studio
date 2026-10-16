@@ -4,11 +4,12 @@
 
 ## 项目事实与范围
 
-- 已确认技术路线：Tauri 2 + Vue 3/TypeScript 设计器、微软 Fluent UI Web Components（`@fluentui/web-components` 3.x）及共享 Vue 适配层、Vue Flow 编辑器、Rust 通信与流程运行核心、独立进程协议插件，以及按需分发的 Python embeddable package。
-- 首版仅交付 Windows 10/11 x64 的设计器、独立运行程序、示例协议插件及按需携带的 Python 执行资源，完成串口、界面设计、数据绑定和独立运行包的完整流程。其他平台或架构的开发、构建和验收须通过后续方案变更确定范围。
-- 首版已纳入基础流程节点和同步 Python 代码块；Vue Flow 只负责编辑，Rust 调度器和包内独立 Python 进程执行逻辑，预览和 Runner 共用执行核心。仅当项目包含 Python 节点时，才附带代码节点所需的 embeddable 解释器及锁定依赖，不使用系统 Python 或在目标机器运行 pip；协议插件自带依赖仍按其清单发布。
-- 串口由 Rust 统一管理，流程停止后仍须正确收尾已发出的设备事务；代码节点每次调用使用独立进程，并以 Windows Job Object 管理超时、取消及提交内存限制。流程、依赖与执行边界以方案第 4 节为准。
+- 已确认技术路线：Tauri 2 + Vue 3/TypeScript 设计器、微软 Fluent UI Web Components（`@fluentui/web-components` 3.x）及共享 Vue 适配层、Vue Flow 编辑器、Rust 通信与流程运行核心、独立进程协议插件，以及按需分发的独立 Python 运行资源（Windows embeddable / macOS python-build-standalone）。
+- 交付平台为 Windows 10/11 x64 与 macOS 14+ Apple Silicon arm64 / Intel x64，包含设计器、独立运行程序、示例协议插件及按需携带的 Python 执行资源，完成串口、界面设计、数据绑定和独立运行包流程；各目标分别构建，当前实际验证范围见 docs/VERIFICATION.md。Linux 及其他架构须通过后续方案变更确定范围。
+- 首版已纳入基础流程节点和同步 Python 代码块；Vue Flow 只负责编辑，Rust 调度器和包内独立 Python 进程执行逻辑，预览和 Runner 共用执行核心。仅当项目包含 Python 节点时，才附带代码节点所需的对应平台独立解释器及锁定依赖，不使用系统 Python 或在目标机器运行 pip；协议插件自带依赖仍按其清单发布。
+- 串口由 Rust 统一管理，流程停止后仍须正确收尾已发出的设备事务；代码节点每次调用使用独立进程，Windows 以 Job Object 管理超时、取消及提交内存限制；macOS 使用独立进程组处理超时、取消和后代回收，并按进程组采样 RSS 检测内存超限，不能将其视为 Windows 提交内存硬限制。流程、依赖与执行边界以方案第 4 节为准。
 - 当前首版应用源码、构建与测试已建立；实现接口见 `docs/IMPLEMENTATION.md`，实际验证与待验收范围见 `docs/VERIFICATION.md`。本机模拟验证不代表真实串口、Windows 10 或干净机器验收已经完成。
+- v0.8 实施范围已扩展到 schemaVersion 2、完整 `.hmiproj` 工程包、同进程界面/逻辑双窗与独立撤销、多语言和 Qt 风格组件/布局/画布交互；运行预览改为独立 Runner 子进程，编辑时自动校验热更新，旧任务按启动版本完成。实际验证与实施缺口以 docs/VERIFICATION.md 为准。
 - 用户明确要求后续所有项目改动留痕。本规则服从系统、开发者和用户在当前任务中的明确指令。
 
 ## 修改前

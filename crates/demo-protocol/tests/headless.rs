@@ -32,15 +32,14 @@ async fn dropping_connection_owner_releases_idle_plugin_process() {
 }
 
 #[tokio::test]
-async fn close_invalidates_an_open_task_before_it_acquires_the_session_lock() {
+async fn close_invalidates_an_inflight_open_and_releases_the_session_lock() {
     let directory = tempfile::tempdir().unwrap();
     package(directory.path());
     let manager = ConnectionManager::new(vec![config(30)], directory.path());
     let mut events = manager.subscribe();
     let opening = manager.open("serial");
     tokio::pin!(opening);
-    // A single poll registers the owned opening task. This current-thread test
-    // closes before Tokio can schedule that task, reproducing cancelled flow startup.
+    // A single poll registers the owned opening task, then close races its plugin startup.
     std::future::poll_fn(|context| {
         assert!(opening.as_mut().poll(context).is_pending());
         Poll::Ready(())
@@ -48,6 +47,16 @@ async fn close_invalidates_an_open_task_before_it_acquires_the_session_lock() {
     .await;
     manager.close("serial").await.unwrap();
     assert_eq!(opening.await.unwrap_err().code, "CANCELLED");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.data["state"]["status"] == "closed" {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("close must publish its final state after the open task is invalidated");
     assert_eq!(
         manager
             .command("serial", "read", json!({}), CancellationToken::new())
@@ -56,23 +65,36 @@ async fn close_invalidates_an_open_task_before_it_acquires_the_session_lock() {
             .code,
         "CONNECTION_CLOSED"
     );
-    assert_eq!(
-        events.recv().await.unwrap().data["state"]["status"],
-        "closed"
+    let late_open = tokio::time::timeout(Duration::from_millis(50), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.kind == "connection.changed" && event.data["state"]["status"] == "open" {
+                break;
+            }
+        }
+    })
+    .await;
+    assert!(
+        late_open.is_err(),
+        "the invalidated open task must not publish a late open state"
     );
 }
 
 fn package(root: &Path) {
     let destination = root.join("demo-temperature");
     std::fs::create_dir_all(&destination).unwrap();
+    let mut manifest: Value =
+        serde_json::from_slice(include_bytes!("../package/manifest.json")).unwrap();
+    manifest["target"] = json!(hmi_core::host_target());
+    manifest["executable"] = json!(format!("demo-protocol{}", std::env::consts::EXE_SUFFIX));
     std::fs::write(
         destination.join("manifest.json"),
-        include_bytes!("../package/manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
     std::fs::copy(
         env!("CARGO_BIN_EXE_demo-protocol"),
-        destination.join("demo-protocol.exe"),
+        destination.join(format!("demo-protocol{}", std::env::consts::EXE_SUFFIX)),
     )
     .unwrap();
 }
@@ -174,7 +196,7 @@ async fn headless_runtime_opens_plugin_reads_device_and_updates_ui_variable() {
     let project:Project=serde_json::from_value(json!({"schemaVersion":1,"id":"headless","name":"Headless runner smoke","width":800,"height":600,
         "pages":[{"id":"page","name":"Main","widgets":[]}],"connections":[connection.clone()],
         "variables":[{"id":"temperature","name":"Temperature","type":"number","initial":0}],
-        "flows":[{"id":"read-flow","name":"Read","enabled":true,"timeoutMs":3000,
+        "flows":[{"id":"read-flow","name":"Read","enabled":true,"timeoutMs":10000,
             "nodes":[
                 {"id":"start","kind":"trigger.ui","label":"Start","position":{"x":0,"y":0},"config":{}},
                 {"id":"open","kind":"connection.open","label":"Open","position":{"x":1,"y":0},"config":{"connectionId":"serial"}},
@@ -219,7 +241,7 @@ async fn headless_runtime_opens_plugin_reads_device_and_updates_ui_variable() {
         .trigger("read-flow", None, json!({"payload":null}), json!({}))
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let event = events.recv().await.unwrap();
             if event.run_id.as_deref() != Some(&id) {

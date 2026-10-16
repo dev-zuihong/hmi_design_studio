@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { placeWidget,openLogic,placeNode } from './helpers/project'
 
 test('designer adds, edits, duplicates, undoes and reloads a saved project', async ({ page }) => {
   const errors: string[] = []
@@ -8,7 +9,7 @@ test('designer adds, edits, duplicates, undoes and reloads a saved project', asy
   expect(await page.evaluate(() => ['fluent-button','fluent-text-input','fluent-switch','fluent-dropdown'].every(tag => !!customElements.get(tag)))).toBe(true)
   const widgets = page.locator('.design-widget')
   const count = await widgets.count()
-  await page.locator('.widget-library-item').filter({ hasText: '文本' }).click()
+  await placeWidget(page,'文本')
   await expect(widgets).toHaveCount(count + 1)
   await page.getByTitle('复制控件 (Ctrl+D)').click()
   await expect(widgets).toHaveCount(count + 2)
@@ -21,7 +22,7 @@ test('designer adds, edits, duplicates, undoes and reloads a saved project', asy
   const download = await downloadPromise
   const path = await download.path()
   expect(path).toBeTruthy()
-  await page.locator('input[type=file]').setInputFiles(path!)
+  await page.locator('input[accept=".hmiproj,.json"]').setInputFiles(path!)
   await expect(widgets).toHaveCount(count + 2)
   await page.screenshot({ path: 'artifacts/designer.png', fullPage: true })
   expect(errors).toEqual([])
@@ -54,18 +55,18 @@ test('flow ports can be joined with an actual pointer drag', async ({ page }) =>
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
-  await page.getByRole('button', { name: '逻辑流程', exact: true }).click()
-  await page.getByTitle('新建流程', { exact: true }).click()
-  await page.locator('.node-library-item').filter({ hasText: '界面事件' }).click()
-  await page.locator('.node-library-item').filter({ hasText: '调试日志' }).click()
-  const source = page.locator('.vue-flow__node').first().locator('.vue-flow__handle.source')
-  const target = page.locator('.vue-flow__node').nth(1).locator('.vue-flow__handle.target')
+  const logic = await openLogic(page)
+  await logic.getByTitle('新建流程', { exact: true }).click()
+  await placeNode(logic,'界面事件',160,180)
+  await placeNode(logic,'调试日志',440,180)
+  const source = logic.locator('.vue-flow__node').first().locator('.vue-flow__handle.source')
+  const target = logic.locator('.vue-flow__node').nth(1).locator('.vue-flow__handle.target')
   const a = (await source.boundingBox())!, b = (await target.boundingBox())!
-  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 })
-  await page.mouse.up()
-  await expect(page.locator('.vue-flow__edge')).toHaveCount(1)
+  await logic.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
+  await logic.mouse.down()
+  await logic.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 })
+  await logic.mouse.up()
+  await expect(logic.locator('.vue-flow__edge')).toHaveCount(1)
   expect(errors).toEqual([])
 })
 
@@ -74,9 +75,11 @@ test('flow editor loads and creates an editable Python flow without executing de
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
   await page.getByRole('button', { name: '文件', exact: true }).click()
+  const opening=page.waitForEvent('popup')
   await page.getByRole('button', { name: '添加 Python 示例流程', exact: true }).click()
-  await expect(page.locator('.vue-flow__node')).toHaveCount(6)
-  await page.screenshot({ path: 'artifacts/flow-editor.png', fullPage: true })
+  const logic=await opening
+  await expect(logic.locator('.vue-flow__node')).toHaveCount(6)
+  await logic.screenshot({ path: 'artifacts/flow-editor.png', fullPage: true })
   await page.getByRole('button', { name: '预览运行', exact: true }).click()
   await expect(page.getByRole('status')).toContainText('浏览器模式支持设计')
   expect(errors).toEqual([])

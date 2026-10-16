@@ -60,12 +60,9 @@ pub async fn execute(args: Vec<String>) -> Result<Value> {
     let session = session::Session::new(project.clone(), resources).await?;
     let result = async {
         session.runtime.start().await.map_err(error)?;
+        let connections = session.connection_manager().await;
         for connection in &project.connections {
-            session
-                .connections
-                .open(&connection.id)
-                .await
-                .map_err(error)?;
+            connections.open(&connection.id).await.map_err(error)?;
         }
         let flow_id = option("--flow").unwrap_or_else(|| "flow_read".into());
         let mut events = session.runtime.subscribe();

@@ -13,19 +13,219 @@ pub fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+pub fn release_platform() -> &'static str {
+    match hmi_core::host_target() {
+        "x86_64-pc-windows-msvc" => "windows-x64",
+        "aarch64-apple-darwin" => "macos-arm64",
+        "x86_64-apple-darwin" => "macos-x64",
+        _ => "unsupported",
+    }
+}
+
+pub fn runner_relative() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "HmiRunner.app/Contents/MacOS/hmi-runner"
+    } else {
+        "HmiRunner.exe"
+    }
+}
+
+pub fn check_native_binary(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        check_amd64(path)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let bytes = fs::read(path).map_err(error)?;
+        let cpu = if cfg!(target_arch = "aarch64") {
+            0x0100000c
+        } else {
+            0x01000007
+        };
+        check_macho(&bytes, cpu)?;
+        if fs::metadata(path).map_err(error)?.permissions().mode() & 0o111 == 0 {
+            return Err(format!("程序缺少可执行权限: {}", path.display()));
+        }
+        Ok(())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = path;
+        Err("当前平台不受支持".into())
+    }
+}
+
+pub fn check_binary_for_target(path: &Path, target: &str) -> Result<()> {
+    match target {
+        "x86_64-pc-windows-msvc" => check_amd64(path),
+        "aarch64-apple-darwin" => {
+            check_macho(&fs::read(path).map_err(error)?, 0x0100000c)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if fs::metadata(path).map_err(error)?.permissions().mode() & 0o111 == 0 {
+                    return Err(format!("程序缺少可执行权限: {}", path.display()));
+                }
+            }
+            Ok(())
+        }
+        "x86_64-apple-darwin" => {
+            check_macho(&fs::read(path).map_err(error)?, 0x01000007)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if fs::metadata(path).map_err(error)?.permissions().mode() & 0o111 == 0 {
+                    return Err(format!("程序缺少可执行权限: {}", path.display()));
+                }
+            }
+            Ok(())
+        }
+        _ => Err(format!("不支持的插件目标架构: {target}")),
+    }
+}
+
+fn check_macho(bytes: &[u8], expected_cpu: u32) -> Result<()> {
+    let invalid = || "程序必须包含当前架构的 macOS Mach-O 可执行文件".to_string();
+    let thin = |data: &[u8]| {
+        data.len() >= 32
+            && data[..4] == [0xcf, 0xfa, 0xed, 0xfe]
+            && u32::from_le_bytes(data[4..8].try_into().unwrap()) == expected_cpu
+            && u32::from_le_bytes(data[12..16].try_into().unwrap()) == 2
+    };
+    if thin(bytes) {
+        return Ok(());
+    }
+    if bytes.len() < 8 {
+        return Err(invalid());
+    }
+    if bytes[..4] == [0xca, 0xfe, 0xba, 0xbe] || bytes[..4] == [0xca, 0xfe, 0xba, 0xbf] {
+        let stride = if bytes[3] == 0xbf { 32 } else { 20 };
+        let count = u32::from_be_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        if count <= 32 && bytes.len() >= 8 + count * stride {
+            for index in 0..count {
+                let record = 8 + index * stride;
+                if u32::from_be_bytes(bytes[record..record + 4].try_into().unwrap()) != expected_cpu
+                {
+                    continue;
+                }
+                let (start, size) = if stride == 20 {
+                    (
+                        u32::from_be_bytes(bytes[record + 8..record + 12].try_into().unwrap())
+                            as u64,
+                        u32::from_be_bytes(bytes[record + 12..record + 16].try_into().unwrap())
+                            as u64,
+                    )
+                } else {
+                    (
+                        u64::from_be_bytes(bytes[record + 8..record + 16].try_into().unwrap()),
+                        u64::from_be_bytes(bytes[record + 16..record + 24].try_into().unwrap()),
+                    )
+                };
+                if start < (8 + count * stride) as u64 {
+                    continue;
+                }
+                if let Some(end) = start
+                    .checked_add(size)
+                    .filter(|end| *end <= bytes.len() as u64)
+                {
+                    if thin(&bytes[start as usize..end as usize]) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    Err(invalid())
+}
+
 #[derive(Clone)]
 pub struct Resources {
     pub root: PathBuf,
     pub runner: bool,
 }
 impl Resources {
-    pub fn discover(runner: bool) -> Self {
+    pub fn discover(runner: bool) -> Result<Self> {
         let executable = std::env::current_exe().unwrap_or_default();
+        let override_root = std::env::var_os("HMI_RESOURCE_ROOT").map(PathBuf::from);
+        let discovered = Self::from_executable(&executable, runner, override_root.clone());
+        #[cfg(target_os = "macos")]
+        if !runner
+            && override_root.is_none()
+            && executable
+                .parent()
+                .is_some_and(|p| p.file_name().is_some_and(|n| n == "MacOS"))
+        {
+            // Imported resources must never mutate a signed/read-only application bundle.
+            let root = dirs::data_local_dir()
+                .ok_or("用户资源目录不可用")?
+                .join("HmiStudio/resources")
+                .join(env!("CARGO_PKG_VERSION"))
+                .join(release_platform());
+            for name in ["templates", "plugins", "python"] {
+                let source = discovered.root.join(name);
+                if !source.is_dir() {
+                    continue;
+                }
+                for entry in fs::read_dir(&source).map_err(error)? {
+                    let entry = entry.map_err(error)?;
+                    let destination = root.join(name).join(entry.file_name());
+                    let refresh_template = name == "templates"
+                        && sha256(&entry.path().join(runner_relative()))?
+                            != sha256(&destination.join(runner_relative())).unwrap_or_default();
+                    if !destination.exists() || refresh_template {
+                        let parent = destination.parent().ok_or("资源缓存目录无效")?;
+                        fs::create_dir_all(parent).map_err(error)?;
+                        let stage = tempfile::tempdir_in(parent).map_err(error)?;
+                        let prepared = stage.path().join("prepared");
+                        if name == "templates" {
+                            crate::export::copy_app_bundle(
+                                &entry.path().join("HmiRunner.app"),
+                                &prepared.join("HmiRunner.app"),
+                            )?;
+                        } else {
+                            copy_tree(&entry.path(), &prepared)?;
+                        }
+                        if destination.exists() {
+                            let backup = destination
+                                .with_extension(format!("previous-{}", uuid::Uuid::new_v4()));
+                            fs::rename(&destination, &backup).map_err(error)?;
+                            if let Err(problem) = fs::rename(&prepared, &destination) {
+                                let _ = fs::rename(&backup, &destination);
+                                return Err(error(problem));
+                            }
+                            let _ = fs::remove_dir_all(backup);
+                        } else {
+                            fs::rename(prepared, destination).map_err(error)?;
+                        }
+                    }
+                }
+            }
+            return Ok(Self { root, runner });
+        }
+        Ok(discovered)
+    }
+    fn from_executable(executable: &Path, runner: bool, override_root: Option<PathBuf>) -> Self {
         let directory = executable.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let root = if runner && directory.join("project.json").exists() {
+        let bundle = directory
+            .parent()
+            .filter(|contents| {
+                directory.file_name().is_some_and(|name| name == "MacOS")
+                    && contents.file_name().is_some_and(|name| name == "Contents")
+            })
+            .map(|contents| contents.join("Resources"));
+        let preview_root = std::env::var_os("HMI_PREVIEW_HOST").is_some();
+        let root = if runner && preview_root && override_root.is_some() {
+            override_root.unwrap()
+        } else if runner && bundle.is_some() {
+            bundle.unwrap()
+        } else if runner && directory.join("project.json").exists() {
             directory
-        } else if let Some(path) = std::env::var_os("HMI_RESOURCE_ROOT") {
-            PathBuf::from(path)
+        } else if let Some(path) = override_root {
+            path
+        } else if let Some(path) = bundle {
+            path
         } else if directory.join("resources").is_dir() {
             directory.join("resources")
         } else {
@@ -34,10 +234,15 @@ impl Resources {
         Self { root, runner }
     }
     pub fn plugins(&self) -> PathBuf {
-        self.root.join("plugins")
+        let target = self.root.join("plugins").join(hmi_core::host_target());
+        if target.exists() {
+            target
+        } else {
+            self.root.join("plugins")
+        }
     }
     pub fn template(&self) -> PathBuf {
-        self.root.join("templates/windows-x64")
+        self.root.join("templates").join(release_platform())
     }
     pub fn webview(&self) -> PathBuf {
         self.root.join("webview2")
@@ -46,11 +251,22 @@ impl Resources {
         if self.runner {
             return self.root.join("runtime/python");
         }
-        let custom = self.root.join("python/projects").join(project_id);
+        let target = self.root.join("python").join(hmi_core::host_target());
+        let custom = target.join("projects").join(project_id);
         if custom.exists() {
             custom
         } else {
-            self.root.join("python/3.14.8-win_amd64")
+            let scoped = target.join(hmi_python::runtime_id());
+            if scoped.exists() {
+                scoped
+            } else {
+                let legacy_custom = self.root.join("python/projects").join(project_id);
+                if legacy_custom.exists() {
+                    legacy_custom
+                } else {
+                    self.root.join("python").join(hmi_python::runtime_id())
+                }
+            }
         }
     }
     pub fn plugin_manifests(&self) -> Result<Vec<Value>> {
@@ -83,13 +299,16 @@ pub async fn check_python(
         return Ok(None);
     }
     let config = project.python.as_ref().ok_or("未指定 Python 运行资源")?;
-    if config.runtime_id != "3.14.8-win_amd64" {
-        return Err("Python 资源必须为 3.14.8-win_amd64".into());
+    if config.runtime_id != hmi_python::runtime_id() {
+        return Err(format!(
+            "当前平台需要 Python 资源 {}，请导入对应平台的运行资源与依赖",
+            hmi_python::runtime_id()
+        ));
     }
     if config
         .runtime_sha256
         .as_deref()
-        .is_some_and(|v| v != hmi_python::ARCHIVE_SHA256)
+        .is_some_and(|v| v != hmi_python::archive_sha256())
     {
         return Err("项目 Python SHA-256 与固定运行资源不一致".into());
     }
@@ -318,6 +537,49 @@ pub fn check_amd64(path: &Path) -> Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_resources_and_overrides_are_resolved_without_working_directory() {
+        let bundle = Path::new("/Applications/HmiRunner.app/Contents");
+        let executable = bundle.join("MacOS/hmi-runner");
+        let override_root = PathBuf::from("/tmp/development-resources");
+        assert_eq!(
+            Resources::from_executable(&executable, true, Some(override_root.clone())).root,
+            bundle.join("Resources")
+        );
+        assert_eq!(
+            Resources::from_executable(&executable, false, None).root,
+            bundle.join("Resources")
+        );
+        assert_eq!(
+            Resources::from_executable(&executable, false, Some(override_root.clone())).root,
+            override_root
+        );
+    }
+
+    #[test]
+    fn macho_requires_an_executable_for_the_requested_architecture() {
+        let arm = 0x0100000c;
+        let x64 = 0x01000007;
+        let mut thin = vec![0; 32];
+        thin[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
+        thin[4..8].copy_from_slice(&u32::to_le_bytes(arm));
+        thin[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        assert!(check_macho(&thin, arm).is_ok());
+        assert!(check_macho(&thin, x64).is_err());
+        assert!(check_macho(&thin[..16], arm).is_err());
+        let mut fat = vec![0; 28];
+        fat[..4].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+        fat[4..8].copy_from_slice(&1_u32.to_be_bytes());
+        fat[8..12].copy_from_slice(&u32::to_be_bytes(arm));
+        fat[16..20].copy_from_slice(&28_u32.to_be_bytes());
+        fat[20..24].copy_from_slice(&32_u32.to_be_bytes());
+        fat.extend_from_slice(&thin);
+        assert!(check_macho(&fat, arm).is_ok());
+        assert!(check_macho(&fat, x64).is_err());
+        fat[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(check_macho(&fat, arm).is_err());
+    }
 
     pub fn fake_pe() -> Vec<u8> {
         let mut data = vec![0_u8; 128];

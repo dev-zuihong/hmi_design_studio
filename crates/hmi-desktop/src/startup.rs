@@ -1,6 +1,8 @@
 use crate::{resources::*, AppMode};
+#[cfg(windows)]
 use std::process::Command;
 
+#[cfg(windows)]
 pub fn prepare_webview(resources: &Resources, mode: AppMode) -> Result<()> {
     let runtime = resources.webview();
     if !runtime.join("msedgewebview2.exe").exists() {
@@ -46,6 +48,15 @@ pub fn prepare_webview(resources: &Resources, mode: AppMode) -> Result<()> {
     }
     std::env::set_var("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", absolute);
     Ok(())
+}
+#[cfg(not(windows))]
+pub fn prepare_webview(_resources: &Resources, _mode: AppMode) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        // Tauri uses the operating system's WKWebView on macOS.
+        Ok(())
+    } else {
+        Err("仅支持 Windows x64 和 macOS arm64/x64".into())
+    }
 }
 pub fn fatal(message: &str) {
     eprintln!("{message}");

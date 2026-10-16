@@ -1,0 +1,16 @@
+{
+  "version": "3.14.8",
+  "release": "20261013",
+  "abi": "cp314",
+  "artifacts": {
+    "aarch64-apple-darwin": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.14.8%2B20261013-aarch64-apple-darwin-install_only.tar.gz",
+      "sha256": "709f419d175eb015f810b68aa54bdae1d776c9824cb362aa701c93b0a9f2a9e7"
+    },
+    "x86_64-apple-darwin": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.14.8%2B20261013-x86_64-apple-darwin-install_only.tar.gz",
+      "sha256": "e09bce050cf075e777d1a802c4a11b6d43d54291b5f76911887173b28ad9c9fd"
+    }
+  },
+  "digestSource": "GitHub Releases API asset digest (sha256) from astral-sh/python-build-standalone release 20261013"
+}

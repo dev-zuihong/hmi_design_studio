@@ -24,3 +24,31 @@ python scripts/prepare-python-deps.py --runtime .cache/python/3.14.8-win_amd64 -
 每次代码调用在新 Windows Job 中挂起创建、加入后恢复，默认 5 秒墙钟限制、256 MiB Job 提交内存限制；进程树在成功、失败、取消和超时后结束。每项目一项执行、最多 64 项等待。消息必须是严格 JSON 字典，返回 `None` 结束当前分支。Python、文件描述符和 Windows 标准句柄输出重定向到日志，JSON-RPC 保留单独通道；日志最多保留 1 MiB。可信项目代码以当前用户权限运行，这些限制不是安全沙箱。
 
 依赖准备单元测试：`python -B -m unittest discover -s resources/python -p test_*.py`。准备好 numpy/requests 环境后设置 `HMI_TEST_PYTHON_DEPENDENCIES_ROOT` 并运行 `cargo test -p hmi-python -- --ignored`，验证原生 DLL、标准库和传递依赖在实际 embeddable 解释器中加载。
+
+## macOS
+
+macOS 使用 `runtime-source-macos.json` 固定的 python-build-standalone CPython 3.14.8（release `20261013`）完整 install-only 分发，分别锁定 Apple Silicon arm64 和 Intel x64 的 URL 与 SHA-256。Windows 的 embeddable ZIP 和 `._pth` 不用于 macOS。
+
+```sh
+python3 scripts/prepare-python-macos.py --architecture arm64
+# Intel Mac 使用 --architecture x86_64
+cargo test -p hmi-python
+```
+
+默认输出 `.cache/python/3.14.8-aarch64-apple-darwin` 或 `.cache/python/3.14.8-x86_64-apple-darwin`，可用 `--archive-path` 进行离线准备。解释器入口为 `bin/python3.14`，宿主传入 `-I -S -B` 并显式加载包内项目依赖；不依赖系统 Python、site 或用户的 Python 搜索路径。基础归档全部文件和依赖均通过清单哈希验证，准备脚本会将归档中的文件别名实化，运行资源不保留符号链接。已验证缓存只有 worker 更新时可原子切换并保留旧副本；损坏归档或文件仍会被拒绝。
+
+在开发机器准备 macOS 离线依赖：
+
+```sh
+python3 scripts/prepare-python-macos.py --architecture arm64 \
+  --requirements resources/python/requirements-macos-test.txt --imports numpy requests \
+  --output .cache/python/projects/temperature-native-python
+HMI_TEST_PYTHON_DEPENDENCIES_ROOT=.cache/python/projects/temperature-native-python \
+  cargo test -p hmi-python -- --include-ignored
+```
+
+依赖只接受与 CPython 3.14 和目标 macOS 架构兼容的预构建 wheel；`--wheelhouse` 可指定离线 wheel 目录。准备阶段可以使用开发机器的 pip 下载资源，锁定完整传递依赖、wheel 摘要、展开文件及导入模块，再由包内解释器实际导入验证。Runner 不下载、不调用 pip。macOS 资源和锁不能与 Windows 混用，已有项目通过设计器的资源/依赖导入显式切换配置；同一 runtime 重导入保留项目现有依赖锁。
+
+macOS 每次代码调用创建独立进程组，成功、失败、超时和取消后回收组内后代；每约 100 ms 用系统 `/bin/ps` 汇总组 RSS，超限后终止并返回 `MemoryLimit`。RSS 检测存在采样窗口、共享页重复计数等差异，不等同 Windows Job 提交内存硬限制，也不阻止可信代码主动逃离进程组。用户代码仍按当前用户权限运行。
+
+Apple Silicon 的标准库、NumPy/requests、超时/取消、RSS 超限和后代清理已在本机测试；Intel x64 资源下载与 Mach-O 架构检查不能替代 Intel Mac 的实际执行验收。

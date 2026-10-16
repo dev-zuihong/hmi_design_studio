@@ -27,9 +27,31 @@ try {
   await page.waitForLoadState('domcontentloaded')
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
+  const mainPage = page
+  async function openPreviewWindow() {
+    const opening = context.waitForEvent('page')
+    await mainPage.getByRole('button', { name: '预览运行', exact: true }).click()
+    page = await opening
+    page.on('pageerror', error => errors.push(error.message))
+    await page.waitForLoadState('domcontentloaded')
+    await page.locator('.preview-screen').waitFor()
+    assert.match(page.url(), /view=preview/)
+    assert.equal(await mainPage.locator('.studio-shell').isVisible(), true)
+    assert.equal(await mainPage.locator('.command-bar').isVisible(), true)
+    assert.equal(await mainPage.locator('.resources-panel').isVisible(), true)
+    assert.equal(context.pages().length, 2)
+  }
+  async function closePreviewWindow() {
+    const closing = page.waitForEvent('close')
+    await page.getByRole('button', { name: '停止预览', exact: true }).click()
+    await closing
+    page = mainPage
+    await page.locator('.studio-shell').waitFor()
+    assert.equal(context.pages().length, 1)
+  }
   if (mode === 'studio') {
-    await page.getByText('桌面工作区', { exact: true }).waitFor()
-    await page.getByRole('button', { name: '预览运行', exact: true }).click()
+    await mainPage.getByText('桌面工作区', { exact: true }).waitFor()
+    await openPreviewWindow()
   } else {
     await page.locator('.runner-header .status-pill').filter({ hasText: '运行中' }).waitFor({ timeout: 30000 })
   }
@@ -52,7 +74,7 @@ try {
   fs.writeFileSync(`artifacts/native-${mode}-report.json`, JSON.stringify(snapshot, null, 2))
   await page.screenshot({ path: `artifacts/native-${mode}.png` })
   if (mode === 'studio') {
-    await page.getByRole('button', { name: '停止预览', exact: true }).click()
+    await closePreviewWindow()
     // IPC save/open exercises Unicode/space paths without automating a system file dialog.
     const projectFile = path.resolve('artifacts/native project 测试.json')
     const loaded = await page.evaluate(async projectFile => {
@@ -80,7 +102,7 @@ try {
       await window.__TAURI_INTERNALS__.invoke('open_project', { path: projectFile })
     }, { projectFile, loaded })
     await page.reload()
-    await page.getByRole('button', { name: '预览运行', exact: true }).click()
+    await openPreviewWindow()
     await page.locator('.runtime-widget fluent-text-input input').fill('native input')
     await pollSnapshot(snapshot => snapshot.variables.test_text === 'native input')
     await page.locator('.runtime-widget fluent-dropdown').click()
@@ -88,7 +110,7 @@ try {
     await pollSnapshot(snapshot => snapshot.variables.test_choice === 'Beta')
     await page.locator('.runtime-widget fluent-switch').click()
     await pollSnapshot(snapshot => snapshot.variables.test_toggle === true)
-    await page.getByRole('button', { name: '停止预览', exact: true }).click()
+    await closePreviewWindow()
   } else {
     await page.getByRole('button', { name: '停止运行', exact: true }).click()
     await page.getByRole('button', { name: '串口设置', exact: true }).click()

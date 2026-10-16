@@ -3,6 +3,15 @@
 This worker executes trusted project code; process limits are lifecycle controls,
 not a security sandbox. The host starts the process suspended inside a Job.
 """
+import os
+import sys
+
+# The macOS standalone package does not have a _pth file like Windows. Add
+# only the hash-verified project dependency directory; never enable site or
+# consult a machine-wide Python installation.
+if sys.platform == "darwin":
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dependencies"))
+
 import ast
 import ctypes
 import importlib
@@ -10,8 +19,6 @@ import inspect
 import io
 import json
 import math
-import os
-import sys
 import traceback
 import types
 

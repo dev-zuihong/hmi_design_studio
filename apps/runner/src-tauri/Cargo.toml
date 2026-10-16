@@ -7,6 +7,7 @@ build = "build.rs"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+native-preview-smoke = ["hmi-desktop/native-preview-smoke"]
 
 [dependencies]
 hmi-desktop = { path = "../../../crates/hmi-desktop" }

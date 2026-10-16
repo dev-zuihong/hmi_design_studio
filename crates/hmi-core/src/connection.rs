@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex as StdMutex,
+        Arc, Mutex as StdMutex, RwLock as StdRwLock,
     },
     time::Duration,
 };
@@ -70,20 +70,28 @@ struct Session {
     faulted: AtomicBool,
 }
 
-pub struct ConnectionManager {
+struct Registry {
     configs: HashMap<String, ConnectionConfig>,
     slots: HashMap<String, Arc<Mutex<Option<Arc<Session>>>>>,
-    generations: HashMap<String, AtomicU64>,
-    ports: StdMutex<HashSet<String>>,
+    generations: HashMap<String, Arc<AtomicU64>>,
     root: PathBuf,
+}
+
+pub struct ConnectionManager {
+    registry: StdRwLock<Registry>,
+    ports: StdMutex<HashSet<String>>,
     events: broadcast::Sender<RuntimeEvent>,
+    maintenance: Mutex<()>,
 }
 
 impl Drop for ConnectionManager {
     fn drop(&mut self) {
         // Orderly shutdown uses close_all. This fallback also releases idle plugin
         // tasks if a caller drops the manager after an earlier setup failure.
-        for slot in self.slots.values() {
+        let Ok(registry) = self.registry.try_read() else {
+            return;
+        };
+        for slot in registry.slots.values() {
             if let Ok(mut session) = slot.try_lock() {
                 if let Some(session) = session.take() {
                     session.cancel.cancel();
@@ -102,15 +110,18 @@ impl ConnectionManager {
             .collect();
         let generations = connections
             .iter()
-            .map(|c| (c.id.clone(), AtomicU64::new(0)))
+            .map(|c| (c.id.clone(), Arc::new(AtomicU64::new(0))))
             .collect();
         Arc::new(Self {
-            configs: connections.into_iter().map(|c| (c.id.clone(), c)).collect(),
-            slots,
-            generations,
+            registry: StdRwLock::new(Registry {
+                configs: connections.into_iter().map(|c| (c.id.clone(), c)).collect(),
+                slots,
+                generations,
+                root: plugins_root.into(),
+            }),
             ports: StdMutex::new(HashSet::new()),
-            root: plugins_root.into(),
             events,
+            maintenance: Mutex::new(()),
         })
     }
 
@@ -119,7 +130,16 @@ impl ConnectionManager {
     }
 
     pub fn configs(&self) -> Vec<ConnectionConfig> {
-        self.configs.values().cloned().collect()
+        let mut configs: Vec<_> = self
+            .registry
+            .read()
+            .unwrap()
+            .configs
+            .values()
+            .cloned()
+            .collect();
+        configs.sort_by(|a, b| a.id.cmp(&b.id));
+        configs
     }
 
     fn emit(&self, kind: &str, data: Value) {
@@ -137,26 +157,50 @@ impl ConnectionManager {
         // Opening has ownership outside any one flow. Dropping a flow future cannot leak
         // a half-open plugin or leave a port without a registered session.
         let generation = self
+            .registry
+            .read()
+            .unwrap()
             .generations
             .get(id)
-            .ok_or_else(|| CoreError::new("CONNECTION_MISSING", "串口资源不存在"))?
-            .load(Ordering::Acquire);
+            .cloned()
+            .ok_or_else(|| CoreError::new("CONNECTION_MISSING", "串口资源不存在"))?;
+        let expected_generation = generation.load(Ordering::Acquire);
         let manager = Arc::clone(self);
         let id = id.to_owned();
-        tokio::spawn(async move { manager.open_inner(&id, generation).await })
-            .await
-            .map_err(|e| CoreError::new("CONNECTION_TASK", e.to_string()))?
+        tokio::spawn(async move {
+            manager
+                .open_inner(&id, generation, expected_generation)
+                .await
+        })
+        .await
+        .map_err(|e| CoreError::new("CONNECTION_TASK", e.to_string()))?
     }
 
-    async fn open_inner(self: &Arc<Self>, id: &str, generation: u64) -> CoreResult<()> {
-        let config = self
-            .configs
-            .get(id)
-            .ok_or_else(|| CoreError::new("CONNECTION_MISSING", "串口资源不存在"))?
-            .clone();
-        let slot = self.slots.get(id).unwrap();
+    async fn open_inner(
+        self: &Arc<Self>,
+        id: &str,
+        generation: Arc<AtomicU64>,
+        expected_generation: u64,
+    ) -> CoreResult<()> {
+        let (config, slot) = {
+            let registry = self.registry.read().unwrap();
+            let config = registry
+                .configs
+                .get(id)
+                .ok_or_else(|| CoreError::new("CONNECTION_MISSING", "串口资源不存在"))?
+                .clone();
+            let slot = registry.slots.get(id).cloned().unwrap();
+            if !registry
+                .generations
+                .get(id)
+                .is_some_and(|current| Arc::ptr_eq(current, &generation))
+            {
+                return Err(CoreError::cancelled());
+            }
+            (config, slot)
+        };
         let mut guard = slot.lock().await;
-        if self.generations[id].load(Ordering::Acquire) != generation {
+        if !self.is_current_generation(id, &generation, expected_generation) {
             return Err(CoreError::cancelled());
         }
         if let Some(session) = guard.as_ref() {
@@ -177,7 +221,7 @@ impl ConnectionManager {
         let result = self.build_session(config.clone()).await;
         match result {
             Ok(session) => {
-                if self.generations[id].load(Ordering::Acquire) != generation {
+                if !self.is_current_generation(id, &generation, expected_generation) {
                     session.cancel.cancel();
                     session.rpc.shutdown().await;
                     if !simulated {
@@ -193,15 +237,29 @@ impl ConnectionManager {
                 if !simulated {
                     self.ports.lock().unwrap().remove(&port_key);
                 }
+                if !self.is_current_generation(id, &generation, expected_generation) {
+                    return Err(CoreError::cancelled());
+                }
                 self.state(id, "fault", simulated, Some(error.clone()));
                 Err(error)
             }
         }
     }
 
+    fn is_current_generation(&self, id: &str, generation: &Arc<AtomicU64>, expected: u64) -> bool {
+        generation.load(Ordering::Acquire) == expected
+            && self
+                .registry
+                .read()
+                .unwrap()
+                .generations
+                .get(id)
+                .is_some_and(|current| Arc::ptr_eq(current, generation))
+    }
+
     async fn build_session(self: &Arc<Self>, config: ConnectionConfig) -> CoreResult<Arc<Session>> {
-        let directory = self
-            .root
+        let root = self.registry.read().unwrap().root.clone();
+        let directory = root
             .join(&config.protocol_id)
             .canonicalize()
             .map_err(|e| CoreError::new("PLUGIN_MISSING", e.to_string()))?;
@@ -536,8 +594,12 @@ impl ConnectionManager {
         origin_flow_id: Option<&str>,
     ) -> CoreResult<Value> {
         let slot = self
+            .registry
+            .read()
+            .unwrap()
             .slots
             .get(id)
+            .cloned()
             .ok_or_else(|| CoreError::new("CONNECTION_MISSING", "串口资源不存在"))?;
         let session = slot
             .lock()
@@ -570,28 +632,53 @@ impl ConnectionManager {
     }
 
     pub async fn close(self: &Arc<Self>, id: &str) -> CoreResult<()> {
-        self.generations
+        let generation = self
+            .registry
+            .read()
+            .unwrap()
+            .generations
             .get(id)
-            .ok_or_else(|| CoreError::new("CONNECTION_MISSING", "串口资源不存在"))?
-            .fetch_add(1, Ordering::AcqRel);
+            .cloned()
+            .ok_or_else(|| CoreError::new("CONNECTION_MISSING", "串口资源不存在"))?;
         let manager = Arc::clone(self);
         let id = id.to_owned();
-        tokio::spawn(async move { manager.close_inner(&id).await })
-            .await
-            .map_err(|e| CoreError::new("CONNECTION_TASK", e.to_string()))?
+        tokio::spawn(async move {
+            let _maintenance = manager.maintenance.lock().await;
+            let is_current = manager
+                .registry
+                .read()
+                .unwrap()
+                .generations
+                .get(&id)
+                .is_some_and(|current| Arc::ptr_eq(current, &generation));
+            if !is_current {
+                return Err(CoreError::cancelled());
+            }
+            generation.fetch_add(1, Ordering::AcqRel);
+            manager.close_inner(&id).await
+        })
+        .await
+        .map_err(|e| CoreError::new("CONNECTION_TASK", e.to_string()))?
     }
 
     async fn close_inner(&self, id: &str) -> CoreResult<()> {
-        let slot = self
-            .slots
-            .get(id)
-            .ok_or_else(|| CoreError::new("CONNECTION_MISSING", "串口资源不存在"))?;
+        let (slot, config) = {
+            let registry = self.registry.read().unwrap();
+            (
+                registry
+                    .slots
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| CoreError::new("CONNECTION_MISSING", "串口资源不存在"))?,
+                registry.configs.get(id).cloned(),
+            )
+        };
         let mut guard = slot.lock().await;
         if let Some(session) = guard.take() {
             session.cancel.cancel();
             session.rpc.shutdown().await;
         }
-        if let Some(config) = self.configs.get(id) {
+        if let Some(config) = config {
             self.ports
                 .lock()
                 .unwrap()
@@ -602,8 +689,303 @@ impl ConnectionManager {
     }
 
     pub async fn close_all(self: &Arc<Self>) {
-        for id in self.configs.keys() {
-            let _ = self.close(id).await;
+        let manager = Arc::clone(self);
+        let _ = tokio::spawn(async move {
+            let _maintenance = manager.maintenance.lock().await;
+            let ids: Vec<_> = manager
+                .registry
+                .read()
+                .unwrap()
+                .configs
+                .keys()
+                .cloned()
+                .collect();
+            for id in ids {
+                if let Some(generation) = manager.registry.read().unwrap().generations.get(&id) {
+                    generation.fetch_add(1, Ordering::AcqRel);
+                }
+                let _ = manager.close_inner(&id).await;
+            }
+        })
+        .await;
+    }
+
+    /// Reconcile project resources while preserving the actor for every byte-for-byte
+    /// unchanged connection. The plugin root is switched for future opens only.
+    pub async fn reconfigure(
+        self: &Arc<Self>,
+        connections: Vec<ConnectionConfig>,
+        plugins_root: PathBuf,
+    ) -> CoreResult<Vec<String>> {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let _maintenance = manager.maintenance.lock().await;
+            manager.reconfigure_inner(connections, plugins_root).await
+        })
+        .await
+        .map_err(|e| CoreError::new("CONNECTION_TASK", e.to_string()))?
+    }
+
+    async fn reconfigure_inner(
+        self: &Arc<Self>,
+        connections: Vec<ConnectionConfig>,
+        plugins_root: PathBuf,
+    ) -> CoreResult<Vec<String>> {
+        let mut new_configs = HashMap::with_capacity(connections.len());
+        let mut used_ports = HashSet::new();
+        for config in connections {
+            if !crate::safe_identifier(&config.id)
+                || !crate::safe_identifier(&config.protocol_id)
+                || config.port.trim().is_empty()
+                || config.baud_rate == 0
+                || !(5..=8).contains(&config.data_bits)
+                || ![1, 2].contains(&config.stop_bits)
+                || !["none", "odd", "even"].contains(&config.parity.as_str())
+                || new_configs.contains_key(&config.id)
+            {
+                return Err(CoreError::new(
+                    "CONNECTION_CONFIG",
+                    "连接 ID 重复或串口参数无效",
+                ));
+            }
+            if !config.port.starts_with("sim://") && !used_ports.insert(config.port.to_uppercase())
+            {
+                return Err(CoreError::new(
+                    "PORT_IN_USE",
+                    format!("多个连接配置占用串口 {}", config.port),
+                ));
+            }
+            new_configs.insert(config.id.clone(), config);
         }
+
+        let (old_configs, old_slots, old_generations) = {
+            let registry = self.registry.read().unwrap();
+            (
+                registry.configs.clone(),
+                registry.slots.clone(),
+                registry.generations.clone(),
+            )
+        };
+        let mut ids: Vec<String> = old_configs
+            .keys()
+            .chain(new_configs.keys())
+            .cloned()
+            .collect();
+        ids.sort();
+        ids.dedup();
+        let changed: Vec<String> = ids
+            .into_iter()
+            .filter(|id| match (old_configs.get(id), new_configs.get(id)) {
+                (Some(old), Some(new)) => !same_connection_config(old, new),
+                (None, None) => false,
+                _ => true,
+            })
+            .collect();
+
+        let mut reopen = Vec::new();
+        for id in &changed {
+            if let Some(slot) = old_slots.get(id) {
+                if slot.lock().await.is_some() {
+                    reopen.push(id.clone());
+                }
+            }
+        }
+        let mut closed: Vec<String> = Vec::new();
+        for id in &changed {
+            if let Some(generation) = old_generations.get(id) {
+                generation.fetch_add(1, Ordering::AcqRel);
+                if let Err(error) = self.close_inner(id).await {
+                    for restore_id in &closed {
+                        if let Some(generation) = old_generations.get(restore_id) {
+                            let _ = self
+                                .open_inner(
+                                    restore_id,
+                                    generation.clone(),
+                                    generation.load(Ordering::Acquire),
+                                )
+                                .await;
+                        }
+                    }
+                    return Err(error);
+                }
+                closed.push(id.clone());
+            }
+        }
+
+        let mut slots = HashMap::with_capacity(new_configs.len());
+        let mut generations = HashMap::with_capacity(new_configs.len());
+        for (id, config) in &new_configs {
+            let unchanged = old_configs
+                .get(id)
+                .is_some_and(|old| same_connection_config(old, config));
+            if unchanged {
+                slots.insert(id.clone(), old_slots[id].clone());
+                generations.insert(id.clone(), old_generations[id].clone());
+            } else {
+                slots.insert(id.clone(), Arc::new(Mutex::new(None)));
+                generations.insert(id.clone(), Arc::new(AtomicU64::new(0)));
+            }
+        }
+        *self.registry.write().unwrap() = Registry {
+            configs: new_configs,
+            slots,
+            generations,
+            root: plugins_root,
+        };
+        Ok(changed)
+    }
+}
+
+fn same_connection_config(left: &ConnectionConfig, right: &ConnectionConfig) -> bool {
+    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
+}
+
+#[cfg(test)]
+mod reconfigure_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn config(id: &str, port: &str) -> ConnectionConfig {
+        ConnectionConfig {
+            id: id.into(),
+            name: id.into(),
+            port: port.into(),
+            baud_rate: 115_200,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: "none".into(),
+            protocol_id: "demo-protocol".into(),
+            protocol_version: Some("1.0".into()),
+            protocol_config: BTreeMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn reconfigure_preserves_unchanged_actor_slots_and_only_releases_changed_ports() {
+        let manager = ConnectionManager::new(
+            vec![
+                config("keep", "COM1"),
+                config("change", "COM2"),
+                config("remove", "COM4"),
+            ],
+            "/plugins/old",
+        );
+        let (keep_slot, change_slot, keep_generation, change_generation) = {
+            let registry = manager.registry.read().unwrap();
+            (
+                registry.slots["keep"].clone(),
+                registry.slots["change"].clone(),
+                registry.generations["keep"].clone(),
+                registry.generations["change"].clone(),
+            )
+        };
+        manager
+            .ports
+            .lock()
+            .unwrap()
+            .extend(["COM1".into(), "COM2".into(), "COM4".into()]);
+        let changed = manager
+            .reconfigure(
+                vec![
+                    config("keep", "COM1"),
+                    config("change", "COM3"),
+                    config("added", "COM5"),
+                ],
+                PathBuf::from("/plugins/new"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed, vec!["added", "change", "remove"]);
+        {
+            let registry = manager.registry.read().unwrap();
+            assert!(Arc::ptr_eq(&keep_slot, &registry.slots["keep"]));
+            assert!(Arc::ptr_eq(&keep_generation, &registry.generations["keep"]));
+            assert!(!Arc::ptr_eq(&change_slot, &registry.slots["change"]));
+            assert!(!Arc::ptr_eq(
+                &change_generation,
+                &registry.generations["change"]
+            ));
+            assert!(!registry.slots.contains_key("remove"));
+            assert_eq!(registry.root, PathBuf::from("/plugins/new"));
+        }
+        assert_eq!(
+            *manager.ports.lock().unwrap(),
+            HashSet::from(["COM1".into()])
+        );
+
+        let switched = manager
+            .reconfigure(
+                vec![
+                    config("keep", "COM1"),
+                    config("change", "COM3"),
+                    config("added", "COM5"),
+                ],
+                PathBuf::from("/plugins/next"),
+            )
+            .await
+            .unwrap();
+        assert!(
+            switched.is_empty(),
+            "changing plugin root alone must not interrupt actors"
+        );
+        assert!(Arc::ptr_eq(
+            &keep_slot,
+            &manager.registry.read().unwrap().slots["keep"]
+        ));
+        assert_eq!(
+            manager.registry.read().unwrap().root,
+            PathBuf::from("/plugins/next")
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_ports_are_rejected_before_any_connection_is_closed() {
+        let manager = ConnectionManager::new(
+            vec![config("one", "COM1"), config("two", "COM2")],
+            "/plugins",
+        );
+        let one_slot = manager.registry.read().unwrap().slots["one"].clone();
+        manager.ports.lock().unwrap().insert("COM1".into());
+        assert!(manager
+            .reconfigure(
+                vec![config("one", "COM1"), config("two", "COM1")],
+                PathBuf::from("/other")
+            )
+            .await
+            .is_err());
+        assert!(Arc::ptr_eq(
+            &one_slot,
+            &manager.registry.read().unwrap().slots["one"]
+        ));
+        assert_eq!(
+            manager.registry.read().unwrap().root,
+            PathBuf::from("/plugins")
+        );
+        assert_eq!(
+            *manager.ports.lock().unwrap(),
+            HashSet::from(["COM1".into()])
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_open_from_replaced_generation_cannot_attach_to_detached_slot() {
+        let manager = ConnectionManager::new(vec![config("device", "COM1")], "/plugins/old");
+        let old_generation = manager.registry.read().unwrap().generations["device"].clone();
+        let old_generation_value = old_generation.load(Ordering::Acquire);
+        manager
+            .reconfigure(
+                vec![config("device", "COM2")],
+                PathBuf::from("/plugins/new"),
+            )
+            .await
+            .unwrap();
+        let error = manager
+            .open_inner("device", old_generation, old_generation_value)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "CANCELLED");
+        assert!(manager.ports.lock().unwrap().is_empty());
+        let slot = manager.registry.read().unwrap().slots["device"].clone();
+        assert!(slot.lock().await.is_none());
     }
 }

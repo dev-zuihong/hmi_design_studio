@@ -1,17 +1,10 @@
 import { test, expect, type Page } from '@playwright/test'
-import { readFile } from 'node:fs/promises'
-
-async function savedProject(page: Page) {
-  const downloading = page.waitForEvent('download')
-  await page.getByTitle('保存项目 (Ctrl+S)').click()
-  const download = await downloading
-  return JSON.parse(await readFile((await download.path())!, 'utf8'))
-}
+import { savedProject,placeWidget } from './helpers/project'
 
 test('button shortcut creates and persists a single protocol action with a typed parameter', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
-  await page.locator('.widget-library-item').filter({ hasText: /^按钮$/ }).click()
+  await placeWidget(page,'按钮')
   await page.locator('.inspector-tabs').getByRole('button', { name: '事件', exact: true }).click()
   await page.getByLabel('快捷动作类型', { exact: true }).selectOption('protocol.command')
   await page.getByLabel('快捷动作连接', { exact: true }).selectOption('sensor')
@@ -39,8 +32,8 @@ test('serial panel drops at the pointer location and binds both connection butto
   await expect(page.locator('.design-widget')).toHaveCount(count + 3)
   const project = await savedProject(page), widgets = project.pages[0].widgets.slice(-3)
   expect(widgets.map((widget: any) => widget.kind)).toEqual(['group', 'button', 'button'])
-  expect(widgets[0].x).toBeCloseTo(Math.round(160 / scale / 8) * 8, 0)
-  expect(widgets[0].y).toBeCloseTo(Math.round(150 / scale / 8) * 8, 0)
+  expect(widgets[0].x).toBeCloseTo(Math.round(Math.max(0,160 / scale - 180) / 8) * 8, 0)
+  expect(widgets[0].y).toBeCloseTo(Math.round(Math.max(0,150 / scale - 70) / 8) * 8, 0)
   expect(widgets.slice(1).map((widget: any) => project.flows.find((flow: any) => flow.id === widget.events.click.flowId).nodes[1].kind)).toEqual(['connection.open', 'connection.close'])
   expect(errors).toEqual([])
 })
@@ -49,7 +42,7 @@ test('plugin configuration editor preserves boolean, enum, object and array type
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
   await page.evaluate(async () => {
-    const modulePath = '/src/lib/resources.ts'
+    const modulePath = performance.getEntriesByType('resource').map(entry=>entry.name).find(name=>name.includes('/src/lib/resources.ts')) ?? '/src/lib/resources.ts'
     const { pluginCatalog } = await import(/* @vite-ignore */ modulePath)
     pluginCatalog.value[0].configSchema = { type: 'object', properties: { enabled: { type: 'boolean', title: '设备启用' }, mode: { type: 'string', title: '模式', enum: ['fast', 'slow'] }, options: { type: 'object', title: '设备选项' }, channels: { type: 'array', title: '通道列表' } } }
   })

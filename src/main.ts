@@ -6,4 +6,7 @@ import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import './style.css'
 import App from './App.vue'
-createApp(App).mount('#app')
+import Preview from './Preview.vue'
+import { i18n, installDesignerTranslations } from './lib/i18n'
+createApp(new URLSearchParams(window.location.search).get('view') === 'preview' ? Preview : App).use(i18n).mount('#app')
+installDesignerTranslations()
