@@ -479,12 +479,14 @@ async fn open_preview_window(
     if state.preview_closing.load(Ordering::Acquire) != 0 {
         return Err("预览进程正在关闭，请稍后重试".into());
     }
-    if let Some(host) = state.preview_process.lock().await.clone() {
-        if host.is_alive().await {
-            let _ = host.request("focus_preview", json!({})).await;
+    // Release the process-slot lock before checking/stopping an old host.
+    let previous_host = state.preview_process.lock().await.clone();
+    if let Some(host) = previous_host {
+        if host.is_alive().await && !host.peer.closed_token().is_cancelled() {
+            host.request("focus_preview", json!({})).await?;
             return Ok(());
         }
-        state.preview_process.lock().await.take();
+        stop_session_locked(&app, &state).await;
     }
     let issues = session::validate(&state.workspace_resources(), &project).await;
     if let Some(issue) = issues.iter().find(|i| i.severity == "error") {
@@ -508,9 +510,19 @@ async fn open_preview_window(
     )
     .await?;
     let mut host_events = host.peer.subscribe();
+    let disconnected = host.peer.closed_token();
     let event_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        while let Ok((name, mut payload)) = host_events.recv().await {
+        loop {
+            let (name, mut payload) = tokio::select! {
+                biased;
+                _ = disconnected.cancelled() => break,
+                event = host_events.recv() => match event {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+            };
             if name == "runtime-event" {
                 if let Some(object) = payload.as_object_mut() {
                     object.insert("generation".into(), json!(generation));
@@ -541,6 +553,12 @@ async fn open_preview_window(
                     let revision = payload["revision"].as_u64().unwrap_or_default();
                     tauri::async_runtime::spawn(async move {
                         let state = app.state::<DesktopState>();
+                        let _transition = state.transition.lock().await;
+                        if state.preview_generation.load(Ordering::Acquire) != generation
+                            || revision < state.preview_revision.load(Ordering::Acquire)
+                        {
+                            return;
+                        }
                         *state.preview_project.lock().await = Some(project.clone());
                         *state.current_project.lock().await = Some(project);
                         state.preview_revision.store(revision, Ordering::Release);
@@ -550,6 +568,13 @@ async fn open_preview_window(
             } else if name == "preview-update-failed" {
                 let _ = event_app.emit(name.as_str(), payload);
             }
+        }
+        // A closed window or crashed host must also reset the editor controls.
+        // An old host's disconnect must never stop a newer preview generation.
+        let state = event_app.state::<DesktopState>();
+        let _transition = state.transition.lock().await;
+        if state.preview_generation.load(Ordering::Acquire) == generation {
+            stop_session_locked(&event_app, &state).await;
         }
     });
     *state.preview_project.lock().await = Some(project);
@@ -561,22 +586,50 @@ async fn open_preview_window(
 }
 
 #[tauri::command]
-async fn get_preview_state(state: State<'_, DesktopState>) -> Result<PreviewState> {
+async fn get_preview_state(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<PreviewState> {
+    let _transition = state.transition.lock().await;
     if state.mode == AppMode::Studio {
-        let host = state
-            .preview_process
-            .lock()
-            .await
-            .clone()
-            .ok_or("预览 host 未运行")?;
-        let mut value = host.request("get_preview_state", json!({})).await?;
-        value["generation"] = json!(state.preview_generation.load(Ordering::Acquire));
-        return serde_json::from_value(value).map_err(error);
+        let host = state.preview_process.lock().await.clone();
+        if let Some(host) = host {
+            if host.is_alive().await && !host.peer.closed_token().is_cancelled() {
+                match host.request("get_preview_state", json!({})).await {
+                    Ok(mut value) => {
+                        value["generation"] =
+                            json!(state.preview_generation.load(Ordering::Acquire));
+                        return serde_json::from_value(value).map_err(error);
+                    }
+                    Err(problem) => {
+                        // Only a confirmed exit/disconnect is a stopped preview;
+                        // errors from a live host must still reach the caller.
+                        if host.is_alive().await && !host.peer.closed_token().is_cancelled() {
+                            return Err(problem);
+                        }
+                    }
+                }
+            }
+            stop_session_locked(&app, &state).await;
+        }
+        // The editor queries state before opening its first preview and after
+        // stopping it. Absence of a host is a normal lifecycle state.
+        return Ok(PreviewState {
+            project: None,
+            running: false,
+            current_page: None,
+            generation: state.preview_generation.load(Ordering::Acquire),
+            snapshot: RuntimeSnapshot::default(),
+            locale: state.preview_locale.lock().await.clone(),
+            revision: state.preview_revision.load(Ordering::Acquire),
+            pending_revision: None,
+            update_status: "applied".into(),
+            pid: None,
+        });
     }
     if !state.preview_host_mode {
         return Err("当前运行程序没有预览 host".into());
     }
-    let _transition = state.transition.lock().await;
     let project = state.preview_project.lock().await.clone();
     let current_page = state.preview_page.lock().await.clone();
     let generation = state.preview_generation.load(Ordering::Acquire);
@@ -670,8 +723,7 @@ async fn start_runtime_session(
 
 fn emit_preview_state(app: &tauri::AppHandle, running: bool, generation: u64) {
     let payload = json!({"running":running,"generation":generation});
-    let _ = app.emit_to("main", "preview-state-changed", payload.clone());
-    let _ = app.emit_to("preview", "preview-state-changed", payload);
+    let _ = app.emit("preview-state-changed", payload);
 }
 
 async fn forward_runtime_event(
@@ -1970,7 +2022,9 @@ async fn handle_preview_rpc(
 ) -> Result<Value> {
     let state = app.state::<DesktopState>();
     match method.as_str() {
-        "get_preview_state" => serde_json::to_value(get_preview_state(state).await?).map_err(error),
+        "get_preview_state" => {
+            serde_json::to_value(get_preview_state(app.clone(), state).await?).map_err(error)
+        }
         "runtime_snapshot" => {
             let generation = payload.get("expectedGeneration").and_then(Value::as_u64);
             serde_json::to_value(
@@ -2131,6 +2185,11 @@ async fn handle_preview_rpc(
 }
 
 pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
+    #[cfg(not(feature = "native-preview-smoke"))]
+    if mode == AppMode::Studio && std::env::var_os("HMI_NATIVE_WORKSPACE_ROOT").is_some() {
+        eprintln!("HMI_NATIVE_WORKSPACE_ROOT requires a native-preview-smoke build");
+        return;
+    }
     let resources = match Resources::discover(mode == AppMode::Runner) {
         Ok(resources) => resources,
         Err(error) => {
@@ -2155,6 +2214,11 @@ pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
         .unwrap_or_else(std::env::temp_dir)
         .join("HmiStudio/workspaces")
         .join("active");
+    // Native acceptance runs must not replace or lock the user's active work.
+    #[cfg(feature = "native-preview-smoke")]
+    let workspace_resource_root = std::env::var_os("HMI_NATIVE_WORKSPACE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or(workspace_resource_root);
     let recovered = if mode == AppMode::Studio {
         workspace::recovered_project(&workspace_resource_root, project_path.as_deref())
     } else {

@@ -16,7 +16,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke, isTauri: mocks.is
 vi.mock('@tauri-apps/api/event', () => ({ listen: mocks.listen, emit: mocks.emit }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: mocks.open, save: mocks.save }))
 
-import { useRuntime } from './backend'
+import { useRuntime, type PreviewState } from './backend'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -48,6 +48,14 @@ function previewState(generation: number, currentPage: string, value: string) {
   ]) }
 }
 
+function idlePreviewState(generation = 0): PreviewState {
+  return {
+    running: false, generation, project: null, currentPage: null,
+    snapshot: { variables: {}, points: {}, connections: {}, flows: {}, logs: [] },
+    revision: 0, updateStatus: 'applied',
+  }
+}
+
 function fire(channel: string, payload: unknown, index = 0) {
   mocks.handlers.get(channel)?.[index]?.({ payload })
 }
@@ -71,6 +79,153 @@ beforeEach(() => {
 })
 
 describe('preview runtime window synchronization', () => {
+  it('attaches while idle and starts the first preview after registering its listeners', async () => {
+    let state: PreviewState = idlePreviewState()
+    const launch = deferred<void>()
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_preview_state') return state
+      if (command === 'open_preview_window') {
+        expect(mocks.handlers.has('runtime-event')).toBe(true)
+        expect(mocks.handlers.has('preview-state-changed')).toBe(true)
+        expect(mocks.handlers.has('preview-input-changed')).toBe(true)
+        await launch.promise
+        state = previewState(1, 'page-a', 'first-launch')
+      }
+    })
+    const runtime = useRuntime()
+    try {
+      await runtime.connectPreview()
+      expect(runtime.running.value).toBe(false)
+      expect(runtime.previewProject.value).toBeUndefined()
+      expect(runtime.generation.value).toBe(0)
+
+      const opening = runtime.openPreview(project())
+      await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('open_preview_window', { project: project() }))
+      expect(runtime.busy.value).toBe(true)
+      expect(runtime.running.value).toBe(false)
+      launch.resolve()
+      await opening
+
+      expect(runtime.busy.value).toBe(false)
+      expect(runtime.running.value).toBe(true)
+      expect(runtime.generation.value).toBe(1)
+      expect(runtime.snapshot.value.variables.version).toBe('first-launch')
+      expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual([
+        'get_preview_state', 'get_preview_state', 'open_preview_window', 'get_preview_state',
+      ])
+    } finally { runtime.dispose() }
+  })
+
+  it('stops, reconnects to the idle host state, and opens a fresh preview generation', async () => {
+    let state: PreviewState = idlePreviewState()
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_preview_state') return state
+      if (command === 'open_preview_window') state = previewState(state.generation + 1, 'page-a', `launch-${state.generation + 1}`)
+      if (command === 'stop_preview') {
+        state = idlePreviewState(state.generation + 1)
+        fire('preview-state-changed', { running: false, generation: state.generation })
+      }
+    })
+    const runtime = useRuntime()
+    try {
+      await runtime.openPreview(project())
+      await runtime.updateInput('input-a', 'old-session-input')
+      await runtime.stop()
+      expect(mocks.invoke).toHaveBeenCalledWith('stop_preview', { expectedGeneration: 1 })
+      expect(runtime.running.value).toBe(false)
+      expect(runtime.previewProject.value).toBeUndefined()
+      expect(runtime.busy.value).toBe(false)
+
+      await runtime.connectPreview()
+      expect(runtime.generation.value).toBe(2)
+      expect(runtime.running.value).toBe(false)
+      await runtime.openPreview(project())
+      expect(runtime.running.value).toBe(true)
+      expect(runtime.busy.value).toBe(false)
+      expect(runtime.generation.value).toBe(3)
+      expect(runtime.snapshot.value.variables.version).toBe('launch-3')
+      expect(runtime.inputs.value['input-a']).toBe(25)
+      expect(mocks.invoke.mock.calls.filter(([command]) => command === 'open_preview_window')).toHaveLength(2)
+      expect(mocks.listen.mock.calls.filter(([channel]) => channel === 'preview-state-changed')).toHaveLength(1)
+    } finally { runtime.dispose() }
+  })
+
+  it('propagates a real initial state-read failure and allows retry without leaving preview busy', async () => {
+    const failure = new Error('preview state transport failed')
+    let failRead = true
+    let state: PreviewState = idlePreviewState()
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_preview_state') {
+        if (failRead) throw failure
+        return state
+      }
+      if (command === 'open_preview_window') state = previewState(1, 'page-a', 'retry')
+    })
+    const runtime = useRuntime()
+    try {
+      await expect(runtime.openPreview(project())).rejects.toBe(failure)
+      expect(runtime.busy.value).toBe(false)
+      expect(runtime.running.value).toBe(false)
+      expect(mocks.invoke.mock.calls.some(([command]) => command === 'open_preview_window')).toBe(false)
+
+      failRead = false
+      await runtime.openPreview(project())
+      expect(runtime.running.value).toBe(true)
+      expect(runtime.busy.value).toBe(false)
+    } finally { runtime.dispose() }
+  })
+
+  it('propagates a host launch failure and can retry from the idle state', async () => {
+    const failure = new Error('runner binary could not launch')
+    let failLaunch = true
+    let state: PreviewState = idlePreviewState()
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_preview_state') return state
+      if (command === 'open_preview_window') {
+        if (failLaunch) throw failure
+        state = previewState(1, 'page-a', 'retry')
+      }
+    })
+    const runtime = useRuntime()
+    try {
+      await expect(runtime.openPreview(project())).rejects.toBe(failure)
+      expect(runtime.busy.value).toBe(false)
+      expect(runtime.running.value).toBe(false)
+      expect(runtime.previewProject.value).toBeUndefined()
+
+      failLaunch = false
+      await runtime.openPreview(project())
+      expect(runtime.running.value).toBe(true)
+      expect(runtime.busy.value).toBe(false)
+    } finally { runtime.dispose() }
+  })
+
+  it('reports failed hydration after launch while preserving a usable stop path', async () => {
+    const failure = new Error('running host snapshot unavailable')
+    let launched = false
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_preview_state') {
+        if (launched) throw failure
+        return idlePreviewState()
+      }
+      if (command === 'open_preview_window') {
+        launched = true
+        fire('preview-state-changed', { running: true, generation: 1 })
+      }
+      if (command === 'stop_preview') launched = false
+    })
+    const runtime = useRuntime()
+    try {
+      await expect(runtime.openPreview(project())).rejects.toBe(failure)
+      expect(runtime.busy.value).toBe(false)
+      expect(runtime.running.value).toBe(true)
+      await runtime.stop()
+      expect(mocks.invoke).toHaveBeenCalledWith('stop_preview', { expectedGeneration: 1 })
+      expect(runtime.running.value).toBe(false)
+      expect(runtime.busy.value).toBe(false)
+    } finally { runtime.dispose() }
+  })
+
   it('retains uncommitted device ID edits but discards local overrides when the bound backend value changes', async () => {
     const fixture = project()
     fixture.pages[0]!.widgets[0]!.bindings.value = { source: 'backend', key: 'ptb', path: 'byDevice.$deviceKey.deviceId' }

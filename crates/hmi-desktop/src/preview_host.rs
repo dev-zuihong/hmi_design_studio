@@ -277,15 +277,18 @@ impl PreviewHostProcess {
         if child.try_wait().ok().flatten().is_some() {
             return;
         }
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(25),
-            self.peer.request("shutdown", serde_json::json!({})),
-        )
-        .await;
-        if tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
-            .await
-            .is_err()
-        {
+        let disconnected = self.peer.closed_token().is_cancelled();
+        if !disconnected {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(25),
+                self.peer.request("shutdown", serde_json::json!({})),
+            )
+            .await;
+        }
+        // The host already cleans up on IPC loss. Do not send an unanswerable
+        // shutdown RPC, but retain the full grace period for device transactions.
+        let grace = std::time::Duration::from_secs(if disconnected { 30 } else { 5 });
+        if tokio::time::timeout(grace, child.wait()).await.is_err() {
             let _ = child.kill().await;
             let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
         }

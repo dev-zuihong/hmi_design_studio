@@ -100,6 +100,10 @@ WorkspaceStore 是同一Studio工程的唯一权威状态；两个编辑WebView�
 
 `open_preview_window` 创建独立Runner `--preview-host`子进程及私有资源快照，经本机UDS/NamedPipe认证通信；Studio只代理运行命令/状态，不持有执行会话。Runner前端按environment.mode选择Preview，普通导出Runner仍按原入口自动启动静态项目。
 
+CHG-0016 修正预览生命周期：Studio 的 `get_preview_state` 在首次启动前及停止后返回正常空闲状态（`running:false`，`project/currentPage/pid:null`，空运行快照，保留当前代次和修订号），前端仍先订阅事件、查询状态，再启动 host。已确认退出或 IPC 断开的 host 收尾后也返回空闲；存活 host 的真实 RPC 错误继续上抛。退出监听按代次清理旧会话并广播到主窗与逻辑窗，旧进程的迟到通知不得停止新预览或回写旧修订。
+
+IPC 已断开时不再发送无法响应的关闭 RPC，直接等待子进程自行收尾退出，最多保留原有 30 秒总等待预算；通道仍连接时维持最多 25 秒关闭 RPC 和后续 5 秒退出等待。正常关窗无需耗尽超时预算，超时才强制结束进程。
+
 前端工程操作停顿300毫秒后发送候选revision；host完成校验与资源准备后切换。Runtime每个run捕获不可变Project Arc，旧任务继续旧逻辑，新trigger用新版本；UI和普通逻辑不重启Session。资源不兼容候选进入等待屏障，停新trigger且不补发，既有run/设备事务结束后切换。状态包含revision/updateStatus/pid/locale，失败保留上一有效版本。变量枚举值域变化也进入资源屏障；资源变更以连接配置、Python运行资源摘要/依赖锁、变量schema及资产引用等工程字段判断，直接原地替换缓存文件不触发热更新。输入与语言通过IPC同步；初次状态读取失败也保留停止/重试入口。
 
 ## 桌面 IPC

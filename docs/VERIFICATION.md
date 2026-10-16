@@ -356,3 +356,35 @@ WebKit 曾在保存后的资源缺失提示改变画布尺寸时报告两处 Res
 原生脚本使用真实 WebView2、Rust 会话与 NativeAOT 后端，在独立测试工程中固定 simulation，禁止运行真实 USB。文件选择对话框由同一宿主文件导入命令代替，以便自动化选择确定文件；真实选择器仍需人工交互验收。模拟测试不代表真实 USB Printer/ZLP、硬件固件 C1–C7、实际烧录、热插拔驱动行为、Windows 10、干净机器、长期运行或不同 DPI 已通过。
 
 当前 USB 热插拔采用 650 ms 枚举轮询，未接入 WM_DEVICECHANGE。多连续段 HEX/IHX 可下发，但原 GUI 配置重载有局限，导出这类 `.ptbcfg` 会明确拒绝并要求分段 BIN。`rfTesting` 统计为 0，因为当前协议没有单独 RF 阶段通知。本轮没有 macOS PTB 后端构建或平台验收。
+
+## CHG-0016：预览 host 首次启动与退出恢复（2026-10-16）
+
+根因为真实 Rust `get_preview_state` 在 host 尚未创建时返回错误，阻断前端 `connectPreview → open_preview_window`。既有浏览器模拟的空闲状态与真实后端不一致，原生 smoke 又直接调用启动命令，因此此前测试未覆盖用户按钮路径。本轮保持前端先订阅事件，修复 Rust 空闲状态与退出回收。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| `npm run build` | Vue/TypeScript 检查及 Studio/Runner 前端生产构建通过 |
+| `npm test` | 64 项通过；新增 5 项覆盖空闲连接、首次启动、停止重开及真实读取/启动/同步错误与重试 |
+| `npm run test:e2e -- tests/e2e/preview.spec.ts` | Chromium 预览专项 9 项通过；这些用例使用 IPC 模拟，不代替下面的原生验证 |
+| `cargo test -p hmi-desktop` | 最终语义修改后 33 项通过、2 项依赖环境专项默认忽略；覆盖会话收尾、IPC 断连、工作区和设备窗口等既有回归 |
+| Windows x64 原生构建 | Studio/Runner Release 构建通过；命令如下，测试工作区覆盖仅在 `native-preview-smoke` 开启 |
+| 普通 Studio 隔离保护 | 对真实 debug Studio 传入测试工作区环境变量，确认立即拒绝且未创建该目录，不会使用用户活动工作区 |
+| 脚本与格式 | `node --check scripts/test-native-preview.mjs`、`lib.rs` 独立 rustfmt 检查通过；全仓格式检查仍有 `preview_host.rs` 的既有长元组及 `resources.rs` 的既有单行条件格式差异，本轮未扩大格式整理范围 |
+
+```powershell
+cargo build -p hmi-studio -p hmi-runner --release --target x86_64-pc-windows-msvc --features hmi-studio/custom-protocol,hmi-studio/native-preview-smoke,hmi-runner/custom-protocol
+```
+
+将构建的 Runner 暂存到 `.cache/templates/windows-x64/HmiRunner.exe`，将 Studio 复制到 `artifacts/native-preview-final-binaries/hmi-studio.exe` 以避免测试锁定构建输出。原生验证命令：
+
+```powershell
+node scripts/test-native-preview.mjs --exe artifacts/native-preview-final-binaries/hmi-studio.exe --resources .cache --output artifacts/native-preview-final-fixed --port 9351
+```
+
+脚本创建唯一、无通信/后端/Python 的工程，只复制模板及固定 WebView2，隔离工作区、恢复文件、锁和 WebView 用户目录。以真实 UI 按钮检查首次启动、重复聚焦同一 PID、逻辑窗加入、逻辑窗停止并同步主窗、停止重开、原生关闭 Runner、关闭后重开、强制结束测试 Runner 后恢复、再次重开和关闭 Studio 清理。停止断言先观察两窗按钮恢复，再查询状态，防止状态查询本身回收 host 掩盖退出事件问题。进程清理核对父子关系和创建时间，不按名称结束用户进程。
+
+首轮 fixture 错误地加入仅属于快照的 `points` 字段，导致项目解析失败；修正 fixture 后 11 阶段通过、WebView 错误 0，实际检视了 Runner 渲染。随后发现正常关窗和强制退出后的按钮恢复多等约 25 秒（原生关闭 27.442 秒，强制退出恢复 26.101 秒）。修复为已断连时不发关闭 RPC，直接等待子进程自行收尾，保留原有最多 30 秒退出预算。最终脚本为此无通信 fixture 增加 15 秒恢复断言；该断言不缩短真实设备事务的产品收尾边界。
+
+最终报告为 `artifacts/native-preview-final-fixed/report.json`：11 阶段全部通过、WebView 错误 0、Studio 正常退出码 0，所有测试进程收尾完成，无额外强制清理。真实 Runner 与 Studio 的 PID 不同，`rendererInspected:true`；`studio-idle.png`、`studio-preview-running.png`、`preview-running.png` 保存于同目录，已检查运行界面截图。无通信工程的原生关窗恢复降至 2.212 秒，强制退出恢复降至 1.807 秒，均通过 15 秒断言。报告中的实际二进制 SHA-256 与暂存副本一致：Studio `bc04a52a278e69d692e07ea709b3109ad52951fd263838d8dbf6f0e580c1c203`，Runner `2fc367c0c6c7a8d48d187cbe7d069ad9a58d435e164a35d3120ed9706b01b09f`。前两轮功能验证报告保留在 `native-preview-first-2` 和 `native-preview-final`，它们尚含 25 秒等待，不用作最终耗时结论。
+
+本轮限 Windows 11 x64 本机预览生命周期，无真实串口/USB、Python 节点或 PTB 后端运行。未重做完整产品回归、PTB 独立运行包发布、Windows 10/干净机器、其他平台、长期或 DPI 验收。构建保留既有 JS chunk 及 Rust 未使用代码提示；用户 `pnpm-lock.yaml` 修改不纳入本次提交。
