@@ -38,9 +38,7 @@ async fn import_one(session: &Arc<session::Session>, path: &Path) -> Result<Valu
         staged.persist(&destination).map_err(error)?;
     }
     session
-        .backend_manager()
-        .await
-        .register_resource(
+        .register_file_resource(
             id.clone(),
             BackendResource {
                 path: destination,
@@ -49,6 +47,11 @@ async fn import_one(session: &Arc<session::Session>, path: &Path) -> Result<Valu
                 name: Some(name.clone()),
             },
         )
+        .await
+        .map_err(error)?;
+    session
+        .flow_services()
+        .record_origin(id.clone(), source.clone())
         .map_err(error)?;
     Ok(
         json!({"id":id,"name":name,"size":metadata.len(),"sha256":digest,"path":source.to_string_lossy(),"status":"ready"}),
@@ -57,18 +60,17 @@ async fn import_one(session: &Arc<session::Session>, path: &Path) -> Result<Valu
 
 pub async fn import(session: &Arc<session::Session>, path: &Path) -> Result<Value> {
     let mut reference = import_one(session, path).await?;
-    if path
-        .extension()
-        .and_then(|value| value.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("ptbcfg"))
+    if session.runtime.project().schema_version <= 3
+        && path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("ptbcfg"))
     {
         if reference["size"].as_u64().unwrap_or(0) > 1024 * 1024 {
             return Err("配置文件不能超过 1 MiB".into());
         }
         let snapshot = session
-            .backend_manager()
-            .await
-            .resource(reference["id"].as_str().unwrap())
+            .file_resource(reference["id"].as_str().unwrap())
             .map_err(error)?;
         let document = read_json(&snapshot.path)?;
         let mut files = Vec::new();
@@ -99,7 +101,11 @@ pub async fn import(session: &Arc<session::Session>, path: &Path) -> Result<Valu
             if references.contains_key(name) {
                 continue;
             }
-            let selected = path.parent().unwrap_or(Path::new(".")).join(name);
+            let origin = session
+                .flow_services()
+                .get_origin(reference["id"].as_str().unwrap())
+                .ok_or("原始资源路径不可用，无法解析伴随文件")?;
+            let selected = origin.parent().unwrap_or(Path::new(".")).join(name);
             match import_one(session, &selected).await {
                 Ok(resource) => {
                     references.insert(name.into(), resource);
@@ -129,6 +135,9 @@ pub async fn action(
     kind: &str,
     args: Value,
 ) -> Result<Value> {
+    if kind == "file.importCompanions" {
+        return import_companions(session, &args).await;
+    }
     if kind == "file.open" {
         let app = app.clone();
         let extensions: Vec<String> = args["extensions"]
@@ -187,6 +196,61 @@ pub async fn action(
     Err(format!("不支持的文件操作: {kind}"))
 }
 
+async fn import_companions(session: &Arc<session::Session>, args: &Value) -> Result<Value> {
+    let resource_id = args
+        .get("resourceId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("缺少原资源 resourceId")?;
+    let origin = session
+        .flow_services()
+        .get_origin(resource_id)
+        .ok_or("原始资源路径不可用，无法解析伴随文件")?;
+    let parent = origin
+        .parent()
+        .ok_or("原始资源没有父目录")?
+        .canonicalize()
+        .map_err(error)?;
+    let paths = args
+        .get("paths")
+        .and_then(Value::as_array)
+        .ok_or("paths 必须是相对路径数组")?;
+    let mut references = serde_json::Map::new();
+    let mut missing = Vec::new();
+    for value in paths {
+        let relative_text = value
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .ok_or("伴随路径必须是非空字符串")?;
+        let relative = crate::project_package::safe_relative(relative_text)?;
+        if references.contains_key(relative_text) {
+            continue;
+        }
+        let candidate = parent.join(relative);
+        let canonical = match candidate.canonicalize() {
+            Ok(path) => path,
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(json!({"path":relative_text,"message":"伴随资源不存在"}));
+                continue;
+            }
+            Err(reason) => return Err(error(reason)),
+        };
+        if !canonical.starts_with(&parent) {
+            return Err("伴随路径解析后超出原始资源目录".into());
+        }
+        match import_one(session, &canonical).await {
+            Ok(reference) => {
+                references.insert(relative_text.to_owned(), reference);
+            }
+            Err(reason) if reason.contains("请选择文件") => {
+                missing.push(json!({"path":relative_text,"message":reason}))
+            }
+            Err(reason) => return Err(reason),
+        }
+    }
+    Ok(json!({"references":references,"missingResources":missing}))
+}
+
 async fn save_document(
     session: &Arc<session::Session>,
     path: &Path,
@@ -197,7 +261,6 @@ async fn save_document(
     // Copy only resources previously registered with this session. Refuse
     // conflicting companions instead of overwriting a different firmware.
     if let Some(companions) = args.get("resources").and_then(Value::as_array) {
-        let manager = session.backend_manager().await;
         let mut copies = Vec::new();
         for companion in companions {
             let id = companion["id"].as_str().ok_or("缺少资源 ID")?;
@@ -206,7 +269,7 @@ async fn save_document(
                     .as_str()
                     .ok_or("缺少伴随文件路径")?,
             )?;
-            let resource = manager.resource(id).map_err(error)?;
+            let resource = session.file_resource(id).map_err(error)?;
             let destination = parent.join(relative);
             if destination == path {
                 return Err("伴随文件与配置文件同名".into());
@@ -258,9 +321,15 @@ mod tests {
     async fn configuration_companions_roundtrip_preserves_snapshots_and_refuses_conflicts() {
         let directory = tempfile::tempdir().unwrap();
         let mut project: hmi_core::Project =
-            serde_json::from_str(include_str!("../../../examples/ing-ptb/project.json")).unwrap();
+            serde_json::from_str(include_str!("../../../resources/default/project.json")).unwrap();
+        project.schema_version = 3;
+        project.code_modules.clear();
+        project.python = None;
+        project.design_system = None;
+        project.transports.clear();
+        project.presentation = None;
         project.id = format!(
-            "ptb-files-test-{}",
+            "file-snapshot-test-{}",
             directory.path().file_name().unwrap().to_string_lossy()
         );
         project.backends.clear();
@@ -286,6 +355,11 @@ mod tests {
         let document = json!({"Firmware":[{"FilePath":"firmware 测试.bin"}],"DutFirmware":{"FilePath":"missing.bin"}});
         std::fs::write(&configuration, document.to_string()).unwrap();
         let reference = import(&session, &configuration).await.unwrap();
+        let origin = session
+            .flow_services()
+            .get_origin(reference["id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(origin, configuration.canonicalize().unwrap());
         assert_eq!(reference["missingResources"][0]["path"], "missing.bin");
         let firmware = &reference["references"]["firmware 测试.bin"];
         let manager = session.backend_manager().await;
@@ -327,7 +401,98 @@ mod tests {
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("ptb-files-test-"));
+            .starts_with("file-snapshot-test-"));
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test]
+    async fn schema_four_import_skips_ptbcfg_parsing_and_companion_action_checks_origin_and_paths()
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let mut project: hmi_core::Project =
+            serde_json::from_str(include_str!("../../../resources/default/project.json")).unwrap();
+        project.id = format!(
+            "file-resource-test-{}",
+            directory.path().file_name().unwrap().to_string_lossy()
+        );
+        project.schema_version = 4;
+        project.code_modules.clear();
+        project.python = None;
+        project.design_system = None;
+        project.transports.clear();
+        project.presentation = None;
+        project.backends.clear();
+        project.flows.clear();
+        project.assets.clear();
+        project.actions.clear();
+        project.windows.clear();
+        for page in &mut project.pages {
+            page.widgets.clear();
+        }
+        let session = session::Session::new(
+            project,
+            Resources {
+                root: directory.path().to_path_buf(),
+                runner: false,
+            },
+        )
+        .await
+        .unwrap();
+        let source = directory.path().join("source.ptbcfg");
+        std::fs::write(
+            &source,
+            b"not json; schema 4 treats this as an ordinary resource",
+        )
+        .unwrap();
+        let reference = import(&session, &source).await.unwrap();
+        assert!(reference.get("references").is_none());
+        assert!(reference.get("missingResources").is_none());
+        let companion = directory.path().join("firmware.bin");
+        std::fs::write(&companion, [1, 3, 5]).unwrap();
+        let imported = import_companions(
+            &session,
+            &json!({"resourceId":reference["id"],"paths":["firmware.bin","missing.bin"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            imported["references"]["firmware.bin"]["name"],
+            "firmware.bin"
+        );
+        assert_eq!(imported["missingResources"][0]["path"], "missing.bin");
+        assert!(import_companions(
+            &session,
+            &json!({"resourceId":"unknown-resource","paths":["firmware.bin"]})
+        )
+        .await
+        .unwrap_err()
+        .contains("原始资源路径不可用"));
+        assert!(import_companions(
+            &session,
+            &json!({"resourceId":reference["id"],"paths":["../escape.bin"]})
+        )
+        .await
+        .is_err());
+
+        #[cfg(unix)]
+        {
+            let outside = directory.path().parent().unwrap().join(format!(
+                "{}-outside.bin",
+                directory.path().file_name().unwrap().to_string_lossy()
+            ));
+            std::fs::write(&outside, [8]).unwrap();
+            std::os::unix::fs::symlink(&outside, directory.path().join("escape-link.bin")).unwrap();
+            assert!(import_companions(
+                &session,
+                &json!({"resourceId":reference["id"],"paths":["escape-link.bin"]})
+            )
+            .await
+            .unwrap_err()
+            .contains("超出"));
+            std::fs::remove_file(outside).unwrap();
+        }
+        session.stop().await;
+        let cache = session::user_directory(&session.runtime.project().id).unwrap();
         std::fs::remove_dir_all(cache).unwrap();
     }
 }
@@ -356,6 +521,15 @@ pub async fn attach(app: &tauri::AppHandle, session: &Arc<session::Session>) {
                                     return Err("设备窗口属于旧会话，请重新打开".into());
                                 }
                                 args["generation"] = backend["generation"].clone();
+                            }
+                            if let Some(transport_id) = args["transportId"].as_str().or_else(||request.context["transportId"].as_str()) {
+                                let snapshot = session.flow_services().transports.snapshot(transport_id);
+                                let key = args["deviceKey"].as_str().or_else(||request.context["deviceKey"].as_str()).ok_or("缺少设备上下文")?;
+                                let device = snapshot["devices"].as_array().and_then(|devices|devices.iter().find(|device|device["deviceKey"]==key && device["present"]==true)).ok_or("设备已移除")?;
+                                if request.context.get("deviceGeneration").or_else(||args.get("deviceGeneration")).is_some_and(|generation| generation != &device["deviceGeneration"]) {
+                                    return Err("设备窗口属于旧会话，请重新打开".into());
+                                }
+                                args["deviceGeneration"] = device["deviceGeneration"].clone();
                             }
                             state.runtime_windows.action(&app, &session.runtime.project(), &request.kind, args, request.context).await
                         } else { action(&app, &session, &request.kind, request.args).await }

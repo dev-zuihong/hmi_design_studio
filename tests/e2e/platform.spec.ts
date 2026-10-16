@@ -113,20 +113,6 @@ for (const [platform, label] of [
   })
 }
 
-test('new Python example stores the native runtime ID from get_environment', async ({ page }) => {
-  await installDesktopMock(page, { platform: 'macos-arm64' })
-  await page.goto('/')
-  await page.getByRole('button', { name: '工作区设置', exact: true }).click()
-  await page.getByRole('button', { name: '使用帮助' }).click()
-  await expect(page.getByRole('dialog', { name: '开始使用' })).toContainText('macOS Apple Silicon 程序')
-  await page.getByTitle('关闭帮助', { exact: true }).click()
-  await page.getByRole('button', { name: '文件', exact: true }).click()
-  await page.getByRole('button', { name: '添加 Python 示例流程', exact: true }).click()
-  const saved = await saveAndReadProject(page)
-  expect(saved.flows.some((flow: any) => flow.nodes.some((node: any) => node.kind === 'python'))).toBe(true)
-  expect(saved.python.runtimeId).toBe('3.14.8-aarch64-apple-darwin')
-})
-
 test('reimporting the same Python runtime preserves the existing dependency lock', async ({ page }) => {
   const dependencyLock = [{ name: 'custom-package', version: '2.4.1', sha256: 'locked-wheel-sha' }]
   const project = makeProject(true, {

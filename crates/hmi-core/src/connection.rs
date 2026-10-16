@@ -854,7 +854,7 @@ mod reconfigure_tests {
             data_bits: 8,
             stop_bits: 1,
             parity: "none".into(),
-            protocol_id: "demo-protocol".into(),
+            protocol_id: "test-protocol".into(),
             protocol_version: Some("1.0".into()),
             protocol_config: BTreeMap::new(),
         }

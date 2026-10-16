@@ -388,3 +388,45 @@ node scripts/test-native-preview.mjs --exe artifacts/native-preview-final-binari
 最终报告为 `artifacts/native-preview-final-fixed/report.json`：11 阶段全部通过、WebView 错误 0、Studio 正常退出码 0，所有测试进程收尾完成，无额外强制清理。真实 Runner 与 Studio 的 PID 不同，`rendererInspected:true`；`studio-idle.png`、`studio-preview-running.png`、`preview-running.png` 保存于同目录，已检查运行界面截图。无通信工程的原生关窗恢复降至 2.212 秒，强制退出恢复降至 1.807 秒，均通过 15 秒断言。报告中的实际二进制 SHA-256 与暂存副本一致：Studio `bc04a52a278e69d692e07ea709b3109ad52951fd263838d8dbf6f0e580c1c203`，Runner `2fc367c0c6c7a8d48d187cbe7d069ad9a58d435e164a35d3120ed9706b01b09f`。前两轮功能验证报告保留在 `native-preview-first-2` 和 `native-preview-final`，它们尚含 25 秒等待，不用作最终耗时结论。
 
 本轮限 Windows 11 x64 本机预览生命周期，无真实串口/USB、Python 节点或 PTB 后端运行。未重做完整产品回归、PTB 独立运行包发布、Windows 10/干净机器、其他平台、长期或 DPI 验收。构建保留既有 JS chunk 及 Rust 未使用代码提示；用户 `pnpm-lock.yaml` 修改不纳入本次提交。
+
+## CHG-0017：设计系统、通用流程能力与移除所有示例
+
+验证日期为 2026-10-16，北京时间；环境 Windows 11 x64。应用版本 0.4.0、工程 schema 4，方案 v1.2。最终范围按用户最新指令改为空白工程和通用能力，不交付任何温度、Python 或 PTB 示例；历史章节的演示包、示例协议和 PTB 后端均已移除。
+
+本轮实现令牌/主题、主组件/实例/覆写/变体、本地版本库、Flex/Grid 及自有 Vue 基础组件；保留串口、用户协议插件、工程 Python 模块、设备作用域分派、通用 USB Printer、文件快照及持久未知结果边界。业务代码与协议由用户工程提供。
+
+在删除示例前，设计系统版本已执行 `pnpm test`（79 项）、`pnpm test:e2e`（58 项）、`pnpm build` 和 Rust workspace（103 项通过、3 项忽略）。这些结果属于删除前基线；下方记录删除后重新验证的实际结果，不把旧测试数当作当前测试数。
+
+原生设计系统验证报告保留在 `artifacts/chg0017-native-preview-v2/report.json`：12 阶段通过、WebView 错误 0；覆盖 schema 4 IPC、实例映射、库图片字节与落盘、实际主题色变化、覆写热更新保持 Runner PID，以及预览首次启动/停止/关窗/异常退出后重开和主窗收尾。该报告在移除示例之前执行，使用独立最小合成工程，不覆盖最终空白启动默认值。
+
+PTB 演示工作已停止。停止前 CLI 模拟和运行包清单曾通过，真实 Runner 的双窗口全链路尚未通过；用户随后要求删除，故没有继续完成或交付 PTB。相关源码、专用脚本、运行包、缓存插件及 PTB 原生测试目录均已删除，不再提供其下载路径或验收承诺。
+
+### 删除范围
+
+- 删除 `examples/`、`resources/example/`、`crates/demo-protocol/`、`backends/ing-ptb/`，以及示例专用生成、变体、构建与原生演示脚本。
+- 删除本仓库内示例插件/后端缓存、PTB 工程互通缓存、温度/Python/PTB 运行包和含示例的旧发行目录，共清理 36 个经绝对路径核对的源/缓存/产物目标；另移除 145 个名称明确的 demo-protocol 构建缓存目标。
+- 前后端默认空白工程，去除“添加 Python 示例流程”、模拟示例端口和演示插件入口；发行脚本不再构建或附带示例。表格组件默认数据行为空，两份包验证脚本移除温度演示参数及断言。自动测试采用测试专用最小合成数据。
+- 保留通用组件、通信与流程/Python 能力；仓库外用户工程、恢复数据和用户进程不在删除范围。
+
+### 最终验证
+
+| 检查 | 删除后的实际结果 |
+| --- | --- |
+| `pnpm test` | 79 项通过；清除表格默认示例行后再次执行通过 |
+| `pnpm build` | Vue/TypeScript 检查及 Studio/Runner 双入口生产构建通过 |
+| `pnpm exec playwright test --workers=2` | 最终 57 项全部通过，退出码 0，用时 1.8 分钟；前几轮修正了依赖已删除示例的测试数据，以及节点创建和预览弹出窗口正常/错误态的就绪等待 |
+| `cargo test --workspace` | 设置 `HMI_TEST_PYTHON_ROOT=.cache/flow-resources/python/3.14.8-win_amd64` 后 94 项通过、0 失败、3 项依赖环境专项忽略；共享管道 import 修正后已重跑 |
+| Python 准备工具 | `python -B -m unittest discover -s resources/python -p 'test_*.py'`：5 项通过 |
+| 格式与脚本 | `cargo fmt --all -- --check` 通过；此前仅一处长元组格式差异已修正。修改的 PowerShell 脚本解析、Git Bash `-n`、原生预览脚本 `node --check` 通过；两份包验证 Python 脚本语法及 `--help` 通过 |
+| Windows x64 构建 | `scripts/build.ps1 -SkipInstall -SkipWebview` 通过，复用已准备的固定 WebView2；随后在最终源码及前端构建完成后再执行 workspace Release 构建通过 |
+| 空白工程与删除路径 | 默认资源为一页空画布，控件、连接、变量、流程、后端和工程代码均为空，无 Python 配置；所有已删除示例路径缺失。最终 `hmi-cli validate --project resources/default/project.json --resources .cache` 返回 `valid:true`、`issues:[]` |
+| 发行目录与 Python 资源 | 发行目录不含示例/演示插件/PTB 后端，Studio/Runner 与最终 Release 二进制摘要一致；测试缓存、目标缓存及发行 Python 的全部资源清单摘要通过，worker 与当前源码一致 |
+| 文档与 Git | UTF-8、相对链接、历史日志前缀、17 个唯一递增编号及工作区/暂存差异检查通过；pnpm 只暂存 55 行旧 UI 依赖移除，用户原有 65 行 zip/i18n 增补保留未暂存 |
+
+3 项默认忽略分别是本机真实插件/Python 工程包输出、指定后端工程包互通，以及 NumPy/requests 原生依赖导入专项；本轮没有为这些专项准备新的外部工程或依赖环境。
+
+最终设计器目录为 `artifacts/HmiStudio-win-x64-20261016-162742/`；构建后已用最后一次 Release 产物更新该目录与 `.cache/templates/windows-x64/HmiRunner.exe`。目录内 `build-verification.json` 记录摘要与清理检查：Studio `fca448a9e8e625ac282c97ae0bc9b64297f29f2307904ef6bc5350bbcd457019`，Runner `485a74482e675428b0adaba113b57c5af7e2ebb3e6efc706d9d729e10e79c277`。没有生成新的演示运行包。
+
+删除后的原生桌面验证限最终构建和 CLI 空白工程校验；没有重跑真实 WebView2 全链路，不能用前述删除前报告替代。构建仍有既有 JS chunk 体积和 Windows 下两处未使用变量提示，不影响上述构建结果。
+
+真实串口/USB Printer/ZLP、Windows 10、干净机器、长期和 DPI 验收未完成；本轮未重新验证 macOS。设计系统使用边界见 [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md)。

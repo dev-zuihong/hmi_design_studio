@@ -854,13 +854,7 @@
             "editable": true
           }
         ],
-        "rows": [
-          {
-            "id": "row_1",
-            "name": "示例",
-            "value": 0
-          }
-        ],
+        "rows": [],
         "sortable": true,
         "selectable": true,
         "rowKey": "id"

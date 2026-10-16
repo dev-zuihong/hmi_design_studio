@@ -26,7 +26,7 @@ describe('portable editable project archives',()=>{
     await expect(archive.open(new File(['broken json'],'broken.json'))).rejects.toThrow();expect(archive.projectId).toBe(project.id);expect(archive.files.get('assets/image.png')).toEqual(new Uint8Array([1,2]))
   })
   it('refreshes external language tables and records dependencies that cannot be included',async()=>{
-    const project=emptyProject(),archive=new BrowserProjectPackage();archive.projectId=project.id;archive.files.set('i18n/de-DE.json',new TextEncoder().encode('{}'));project.i18n!.messages['en-US']={title:'Updated'};project.connections.push({id:'c',name:'Connection',port:'sim://temperature',baudRate:9600,dataBits:8,stopBits:1,parity:'none',protocolId:'missing-protocol',protocolConfig:{}})
+    const project=emptyProject(),archive=new BrowserProjectPackage();archive.projectId=project.id;archive.files.set('i18n/de-DE.json',new TextEncoder().encode('{}'));project.i18n!.messages['en-US']={title:'Updated'};project.connections.push({id:'c',name:'Connection',port:'',baudRate:9600,dataBits:8,stopBits:1,parity:'none',protocolId:'missing-protocol',protocolConfig:{}})
     const blob=await archive.save(project),restored=new BrowserProjectPackage();await restored.open(new File([blob],'messages.hmiproj'));expect(restored.files.has('i18n/de-DE.json')).toBe(false);expect(JSON.parse(new TextDecoder().decode(restored.files.get('i18n/en-US.json')))).toEqual({title:'Updated'});expect(restored.missingDependencies).toEqual(['plugin:missing-protocol'])
   })
 })

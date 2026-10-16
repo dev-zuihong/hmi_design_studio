@@ -72,34 +72,7 @@ impl PreviewHostProcess {
         project: &hmi_core::Project,
         revision: u64,
     ) -> Result<Arc<Self>> {
-        Self::launch_inner(
-            runner,
-            base_resources,
-            workspace_root,
-            project,
-            revision,
-            false,
-        )
-        .await
-    }
-
-    #[cfg(feature = "native-preview-smoke")]
-    pub async fn launch_disconnect_probe(
-        runner: &Path,
-        base_resources: &Path,
-        workspace_root: &Path,
-        project: &hmi_core::Project,
-        revision: u64,
-    ) -> Result<Arc<Self>> {
-        Self::launch_inner(
-            runner,
-            base_resources,
-            workspace_root,
-            project,
-            revision,
-            true,
-        )
-        .await
+        Self::launch_inner(runner, base_resources, workspace_root, project, revision).await
     }
 
     async fn launch_inner(
@@ -108,7 +81,6 @@ impl PreviewHostProcess {
         workspace_root: &Path,
         project: &hmi_core::Project,
         revision: u64,
-        suppress_child_smoke: bool,
     ) -> Result<Arc<Self>> {
         let resources = tempfile::Builder::new()
             .prefix("hmi-preview-")
@@ -192,9 +164,6 @@ impl PreviewHostProcess {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        if suppress_child_smoke {
-            command.env_remove("HMI_NATIVE_PREVIEW_CHILD_REPORT");
-        }
         let child = command
             .spawn()
             .map_err(|e| format!("启动预览进程失败: {e}"))?;
@@ -302,16 +271,17 @@ impl PreviewHostProcess {
             .map(|status| status.is_none())
             .unwrap_or(false)
     }
-
-    pub async fn pid(&self) -> Option<u32> {
-        self.child.lock().await.id()
-    }
 }
 
 fn resource_tree_key(workspace_root: &Path, project: &hmi_core::Project) -> Result<String> {
     let mut hash = Sha256::new();
-    let metadata = serde_json::to_vec(&(&project.id, &project.assets, &project.python, &project.backends))
-        .map_err(|e| e.to_string())?;
+    let metadata = serde_json::to_vec(&(
+        &project.id,
+        &project.assets,
+        &project.python,
+        &project.backends,
+    ))
+    .map_err(|e| e.to_string())?;
     hash.update(metadata);
     let mut files = Vec::new();
     for directory in ["assets", "plugins", "python", "backends"] {
@@ -354,6 +324,7 @@ impl RpcPeer {
         self.closed.clone()
     }
 
+    #[cfg(test)]
     pub fn disconnect(&self) -> Result<()> {
         self.outgoing
             .try_send(Frame::Disconnect)
@@ -696,20 +667,6 @@ pub mod local {
         }
     }
 
-    pub async fn connect(endpoint: &std::path::Path, token: &str) -> Result<RpcPeer> {
-        let stream = UnixStream::connect(endpoint)
-            .await
-            .map_err(|e| e.to_string())?;
-        let (reader, mut writer) = stream.into_split();
-        let hello = serde_json::to_vec(&Frame::Hello {
-            token: token.into(),
-        })
-        .map_err(|e| e.to_string())?;
-        writer.write_all(&hello).await.map_err(|e| e.to_string())?;
-        writer.write_all(b"\n").await.map_err(|e| e.to_string())?;
-        Ok(peer(reader, writer, None))
-    }
-
     pub async fn connect_with_handler<F, Fut>(
         endpoint: &std::path::Path,
         token: &str,
@@ -738,7 +695,7 @@ pub mod local {
 #[cfg(windows)]
 pub mod local {
     use super::*;
-    use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
+    use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
 
     pub struct Listener {
         pipe_name: String,
@@ -760,20 +717,6 @@ pub mod local {
             server.connect().await.map_err(|e| e.to_string())?;
             Ok(server)
         }
-    }
-
-    pub async fn connect(endpoint: &str, token: &str) -> Result<RpcPeer> {
-        let mut stream = ClientOptions::new()
-            .open(endpoint)
-            .map_err(|e| e.to_string())?;
-        let hello = serde_json::to_vec(&Frame::Hello {
-            token: token.into(),
-        })
-        .map_err(|e| e.to_string())?;
-        stream.write_all(&hello).await.map_err(|e| e.to_string())?;
-        stream.write_all(b"\n").await.map_err(|e| e.to_string())?;
-        let (reader, writer) = tokio::io::split(stream);
-        Ok(peer(reader, writer, None))
     }
 
     pub async fn connect_with_handler<F, Fut>(

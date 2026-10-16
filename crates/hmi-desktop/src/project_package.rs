@@ -422,6 +422,25 @@ mod tests {
     use serde_json::json;
     use serde_json::Value;
     #[test]
+    fn schema_four_package_preserves_design_definitions_and_editable_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let work = directory.path().join("work");
+        fs::create_dir_all(&work).unwrap();
+        let project:Project=serde_json::from_value(json!({
+            "schemaVersion":4,"id":"portable-design","name":"Portable","width":800,"height":600,
+            "pages":[{"id":"main","name":"Main","widgets":[]}],
+            "codeModules":[{"id":"logic","name":"application","source":"VALUE = 42\n"}],
+            "designSystem":{"version":1,"tokenSets":{"base":{"id":"base","name":"Base","tokens":{"accent":{"$type":"color","$value":"#123456"}}}},"themes":{},"components":{},"libraries":{"local":{"id":"local","name":"Local","version":"2","namespace":"local"}}}
+        })).unwrap();
+        let archive = directory.path().join("portable.hmiproj");
+        write_package(&archive, &project, &work).unwrap();
+        let (restored, manifest) =
+            read_package(&archive, &directory.path().join("reopened")).unwrap();
+        assert_eq!(manifest.project_schema_version, 4);
+        assert_eq!(restored.design_system, project.design_system);
+        assert_eq!(restored.code_modules[0].source, "VALUE = 42\n");
+    }
+    #[test]
     fn package_round_trip_keeps_same_plugin_id_for_multiple_targets() {
         let dir = tempfile::tempdir().unwrap();
         let resources = dir.path().join("work");
@@ -434,7 +453,7 @@ mod tests {
             ("x86_64-pc-windows-msvc", b"win-plugin".as_slice()),
             ("aarch64-apple-darwin", b"mac-plugin".as_slice()),
         ] {
-            let plugin = resources.join("plugins").join(target).join("demo-protocol");
+            let plugin = resources.join("plugins").join(target).join("test-protocol");
             fs::create_dir_all(&plugin).unwrap();
             fs::write(plugin.join("protocol.bin"), bytes).unwrap();
         }
@@ -446,7 +465,7 @@ mod tests {
             fs::create_dir_all(&runtime).unwrap();
             fs::write(runtime.join("environment.bin"), bytes).unwrap();
         }
-        let project: Project = serde_json::from_value(json!({"schemaVersion":1,"id":"p","name":"P","width":800,"height":600,"pages":[{"id":"page","name":"Page","widgets":[]}],"assets":[{"id":"a","path":"assets/a.bin"}],"connections":[{"id":"c","name":"Device","port":"COM1","baudRate":9600,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"demo-protocol"}],"i18n":{"defaultLocale":"zh-CN","locales":["zh-CN","en-US"],"messages":{"en-US":{"title":"Fresh translation"},"zh-CN":{}}}})).unwrap();
+        let project: Project = serde_json::from_value(json!({"schemaVersion":1,"id":"p","name":"P","width":800,"height":600,"pages":[{"id":"page","name":"Page","widgets":[]}],"assets":[{"id":"a","path":"assets/a.bin"}],"connections":[{"id":"c","name":"Device","port":"COM1","baudRate":9600,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"test-protocol"}],"i18n":{"defaultLocale":"zh-CN","locales":["zh-CN","en-US"],"messages":{"en-US":{"title":"Fresh translation"},"zh-CN":{}}}})).unwrap();
         let archive = dir.path().join("p.hmiproj");
         let manifest = write_package(&archive, &project, &resources).unwrap();
         assert_eq!(manifest.format, "hmi-project");
@@ -470,12 +489,12 @@ mod tests {
         );
         assert!(!reopened.join("i18n/fr-FR.json").exists());
         assert_eq!(
-            fs::read(reopened.join("plugins/x86_64-pc-windows-msvc/demo-protocol/protocol.bin"))
+            fs::read(reopened.join("plugins/x86_64-pc-windows-msvc/test-protocol/protocol.bin"))
                 .unwrap(),
             b"win-plugin"
         );
         assert_eq!(
-            fs::read(reopened.join("plugins/aarch64-apple-darwin/demo-protocol/protocol.bin"))
+            fs::read(reopened.join("plugins/aarch64-apple-darwin/test-protocol/protocol.bin"))
                 .unwrap(),
             b"mac-plugin"
         );
@@ -539,7 +558,7 @@ mod tests {
         )
         .unwrap();
         let mut project: Project =
-            serde_json::from_str(include_str!("../../../resources/example/project.json")).unwrap();
+            serde_json::from_str(include_str!("../../../resources/default/project.json")).unwrap();
         project.schema_version = 2;
         project.assets = vec![hmi_core::Asset {
             id: "tiny-fixture".into(),
@@ -566,10 +585,11 @@ mod tests {
                 gap: None,
                 padding: None,
                 columns: None,
+                ..Default::default()
             });
             page.responsive = Some(json!(false));
         }
-        let foreign = resources.join("plugins/x86_64-pc-windows-msvc/demo-temperature/fixture.bin");
+        let foreign = resources.join("plugins/x86_64-pc-windows-msvc/test-protocol/fixture.bin");
         fs::create_dir_all(foreign.parent().unwrap()).unwrap();
         fs::write(foreign, b"opaque foreign plugin variant").unwrap();
         let python = resources.join(format!(
@@ -603,7 +623,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            fs::read(workspace.join("plugins/x86_64-pc-windows-msvc/demo-temperature/fixture.bin"))
+            fs::read(workspace.join("plugins/x86_64-pc-windows-msvc/test-protocol/fixture.bin"))
                 .unwrap(),
             b"opaque foreign plugin variant"
         );
@@ -654,12 +674,13 @@ mod tests {
         let dependencies =
             crate::resources::read_json(&runtime_root.join("dependencies.lock.json")).unwrap();
         let mut project: Project =
-            serde_json::from_str(include_str!("../../../resources/example/project.json")).unwrap();
+            serde_json::from_str(include_str!("../../../resources/default/project.json")).unwrap();
         project.flows.push(hmi_core::Flow {
             id: "package_fixture_python".into(),
             name: "Package fixture Python".into(),
             enabled: false,
             timeout_ms: 10_000,
+            scope: None,
             nodes: vec![hmi_core::FlowNode {
                 id: "package_fixture_python_node".into(),
                 kind: "python".into(),

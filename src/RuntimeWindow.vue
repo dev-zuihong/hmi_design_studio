@@ -8,5 +8,5 @@ watch(runtime.previewProject, async project => { if (project) { try { await refr
 onMounted(async()=>{try{await runtime.connectWindow()}catch(reason){error.value=String(reason)}})
 onBeforeUnmount(runtime.dispose)
 </script>
-<template><main class="runtime-window-shell"><div v-if="error" class="runner-error" role="alert">{{error}}<button @click="error=''">关闭提示</button></div><RuntimeView v-if="runtime.previewProject.value" :project="runtime.previewProject.value" :runtime="runtime" @error="error=$event"/></main></template>
+<template><main class="runtime-window-shell"><div v-if="error && runtime.previewProject.value?.presentation?.chrome !== 'project'" class="runner-error" role="alert">{{error}}<button @click="error=''">关闭提示</button></div><RuntimeView v-if="runtime.previewProject.value" :project="runtime.previewProject.value" :runtime="runtime" :error="error" @error="error=$event" @retry="runtime.connectWindow().catch(reason=>error=String(reason))"/></main></template>
 <style scoped>.runtime-window-shell{height:100dvh;display:flex;flex-direction:column;min-width:0;overflow:hidden}</style>

@@ -64,19 +64,7 @@ else
   echo "Skipping Python runtime; projects with Python nodes will need it imported before preview/export."
 fi
 
-plugin_directory="$workspace/.cache/plugins/demo-temperature"
-mkdir -p "$plugin_directory"
-cargo build --release --target "$target" -p demo-protocol --bin demo-protocol
 cargo build --release --target "$target" -p hmi-desktop --bin hmi-cli
-cp "$workspace/target/$target/release/demo-protocol" "$plugin_directory/demo-protocol"
-node --input-type=module - "$workspace/crates/demo-protocol/package/manifest.json" "$plugin_directory/manifest.json" "$target" <<'NODE'
-import fs from 'node:fs'
-const [source, destination, target] = process.argv.slice(2)
-const manifest = JSON.parse(fs.readFileSync(source, 'utf8'))
-manifest.target = target
-manifest.executable = 'demo-protocol'
-fs.writeFileSync(destination, `${JSON.stringify(manifest, null, 2)}\n`)
-NODE
 
 tauri="$workspace/node_modules/.bin/tauri"
 profile=release
@@ -106,9 +94,14 @@ ditto "$runner_bundle" "$template"
 stage_studio_resources() {
   local app="$1"
   local resources="$app/Contents/Resources"
-  mkdir -p "$resources/plugins"
-  rm -rf "$resources/plugins/demo-temperature"
-  ditto "$plugin_directory" "$resources/plugins/demo-temperature"
+  if [[ -d "$workspace/.cache/plugins" ]]; then
+    mkdir -p "$resources/plugins"
+    for plugin in "$workspace"/.cache/plugins/*; do
+      [[ -e "$plugin" ]] || continue
+      [[ "$(basename "$plugin")" == "demo-temperature" ]] && continue
+      cp -R "$plugin" "$resources/plugins/"
+    done
+  fi
   if [[ -d "$python_source" ]]; then
     mkdir -p "$resources/python"
     rm -rf "$resources/python/$runtime_id"
@@ -116,38 +109,30 @@ stage_studio_resources() {
   fi
 }
 
-stage_examples() {
-  local destination="$1"
-  mkdir -p "$destination"
-  cp "$workspace/resources/example/project.json" "$destination/project.json"
-  if [[ -d "$python_source" ]]; then
-    node --input-type=module - "$workspace/resources/example/python-project.json" "$destination/python-project.json" "$python_source/runtime-manifest.json" "$python_source/dependencies.lock.json" "$runtime_id" <<'NODE'
-import fs from 'node:fs'
-const [source, destination, runtimePath, lockPath, runtimeId] = process.argv.slice(2)
-const project = JSON.parse(fs.readFileSync(source, 'utf8'))
-const runtime = JSON.parse(fs.readFileSync(runtimePath, 'utf8'))
-const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
-project.python = { runtimeId, runtimeSha256: runtime.archiveSha256, dependencyLock: lock.packages }
-fs.writeFileSync(destination, `${JSON.stringify(project, null, 2)}\n`)
-NODE
-  fi
-}
-
 stage_studio_resources "$studio_bundle"
-stage_examples "$studio_bundle/Contents/Resources/example"
 mkdir -p "$studio_bundle/Contents/Resources/templates/macos-$architecture"
 rm -rf "$studio_bundle/Contents/Resources/templates/macos-$architecture/HmiRunner.app"
 ditto "$template" "$studio_bundle/Contents/Resources/templates/macos-$architecture/HmiRunner.app"
 
 distribution="$workspace/artifacts/HMIStudio-macos-$architecture-$(date '+%Y%m%d-%H%M%S')"
-mkdir -p "$distribution/plugins"
 ditto "$studio_bundle" "$distribution/HMI Design Studio.app"
 ditto "$template" "$distribution/HmiRunner.app"
-ditto "$plugin_directory" "$distribution/plugins/demo-temperature"
-stage_examples "$distribution/example"
-mkdir -p "$distribution/HmiRunner.app/Contents/Resources/plugins"
-ditto "$plugin_directory" "$distribution/HmiRunner.app/Contents/Resources/plugins/demo-temperature"
-cp "$distribution/example/project.json" "$distribution/HmiRunner.app/Contents/Resources/project.json"
+if [[ -d "$workspace/.cache/plugins" ]]; then
+  mkdir -p "$distribution/plugins"
+  for plugin in "$workspace"/.cache/plugins/*; do
+    [[ -e "$plugin" ]] || continue
+    [[ "$(basename "$plugin")" == "demo-temperature" ]] && continue
+    cp -R "$plugin" "$distribution/plugins/"
+  done
+fi
+if [[ -d "$workspace/.cache/plugins" ]]; then
+  mkdir -p "$distribution/HmiRunner.app/Contents/Resources/plugins"
+  for plugin in "$workspace"/.cache/plugins/*; do
+    [[ -e "$plugin" ]] || continue
+    [[ "$(basename "$plugin")" == "demo-temperature" ]] && continue
+    cp -R "$plugin" "$distribution/HmiRunner.app/Contents/Resources/plugins/"
+  done
+fi
 cp "$workspace/target/$target/$profile/hmi-cli" "$distribution/hmi-cli"
 cp "$workspace/README.md" "$distribution/README.md"
 
@@ -163,4 +148,3 @@ node "$workspace/scripts/test-native-macos.mjs" \
 echo "Studio app: $distribution/HMI Design Studio.app"
 echo "Runner template: $distribution/HmiRunner.app"
 echo "CLI: $distribution/hmi-cli"
-echo "Demo plugin: $distribution/plugins/demo-temperature"

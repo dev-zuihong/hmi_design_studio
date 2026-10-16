@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { Activity, ChevronDown, Download, MoreHorizontal, Play, Redo2, Save, Settings2, ShieldCheck, SquareStop, Undo2, Workflow } from 'lucide-vue-next'
-import FButton from './fluent/FButton.vue'
+import BaseButton from './base/BaseButton.vue'
 import type { Editor } from '../lib/editor'
 import { designerLocale, setDesignerLocale, t } from '../lib/i18n'
 
 defineProps<{ editor: Editor; logic: boolean; desktop: boolean; pending: boolean; running: boolean; busy: boolean; leftCollapsed: boolean; rightCollapsed: boolean }>()
 const emit = defineEmits<{
   new: []; open: []; save: [saveAs?: boolean]; import: [kind: 'plugin' | 'python' | 'dependencies']; asset: [];
-  example: []; languages: []; help: []; reset: []; logic: []; check: []; preview: []; stop: []; export: [];
+  languages: []; help: []; reset: []; logic: []; check: []; preview: []; stop: []; export: [];
   toggleLeft: []; toggleRight: [];
 }>()
 const host = ref<HTMLElement>()
@@ -47,7 +47,6 @@ onBeforeUnmount(() => { document.removeEventListener('pointerdown', outside); do
         <button @click="emit('asset')">{{ t('导入图片或字体') }}</button>
         <hr />
         <button @click="emit('languages')">{{ t('工程语言') }}</button>
-        <button @click="emit('example')">{{ t('添加 Python 示例流程') }}</button>
       </div>
     </div>
     <div class="toolbar-project">
@@ -63,10 +62,10 @@ onBeforeUnmount(() => { document.removeEventListener('pointerdown', outside); do
     <button v-if="!logic" class="toolbar-text-button logic-launch" :aria-label="t('逻辑流程') + ' ↗'" :title="t('打开独立逻辑窗口')" @click="emit('logic')"><Workflow :size="17" /><span>{{ t('逻辑流程') }} ↗</span></button>
     <span v-else class="logic-window-label"><Workflow :size="16" />{{ t('独立逻辑编辑器') }}</span>
     <span class="spacer" />
-    <FButton class="wide-command" appearance="subtle" :disabled="pending" @click="emit('check')"><ShieldCheck :size="16" />{{ t('检查') }}</FButton>
-    <FButton appearance="primary" class="toolbar-preview" :disabled="pending || busy" @click="emit('preview')"><Play :size="16" />{{ t(running ? '显示预览' : '预览运行') }}</FButton>
+    <BaseButton class="wide-command" appearance="subtle" :disabled="pending" @click="emit('check')"><ShieldCheck :size="16" />{{ t('检查') }}</BaseButton>
+    <BaseButton appearance="primary" class="toolbar-preview" :disabled="pending || busy" @click="emit('preview')"><Play :size="16" />{{ t(running ? '显示预览' : '预览运行') }}</BaseButton>
     <button v-if="running" class="icon-button" :title="t('停止预览')" :aria-label="t('停止预览')" :disabled="pending || busy" @click="emit('stop')"><SquareStop :size="17" /></button>
-    <FButton class="wide-command" :disabled="pending || !desktop" @click="emit('export')"><Download :size="16" />{{ t('导出程序') }}</FButton>
+    <BaseButton class="wide-command" :disabled="pending || !desktop" @click="emit('export')"><Download :size="16" />{{ t('导出程序') }}</BaseButton>
     <div class="toolbar-menu-host compact-more">
       <button class="icon-button" data-menu-trigger="more" :title="t('更多操作')" :aria-label="t('更多操作')" :aria-expanded="menu === 'more'" @click="toggle('more')"><MoreHorizontal :size="18" /></button>
       <div v-if="menu === 'more'" class="studio-menu menu-right" @click="close()">
@@ -101,7 +100,7 @@ onBeforeUnmount(() => { document.removeEventListener('pointerdown', outside); do
 .studio-menu>button:hover:not(:disabled){background:#edf4fb}.studio-menu kbd{margin-left:auto;color:#778596;font-size:10px}.studio-menu hr{border:0;border-top:1px solid #edf0f4;margin:5px 2px}
 .toolbar-language{display:flex;gap:8px;align-items:center;padding:7px 9px;margin:0;font-size:12px}.toolbar-language select{width:116px;margin-left:auto;padding:4px;font-size:12px}
 .logic-window-label{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;color:#667789}.compact-more{display:none}
-.studio-toolbar :deep(fluent-button){flex-shrink:0;font-size:12px}.studio-toolbar .icon-button{width:30px;height:30px;flex-shrink:0}
+.studio-toolbar :deep(.base-button){flex-shrink:0;font-size:12px}.studio-toolbar .icon-button{width:30px;height:30px;flex-shrink:0}
 .studio-toolbar button:focus-visible{outline:2px solid #0f6cbd;outline-offset:1px}.studio-toolbar button:disabled{opacity:.4;cursor:default}
 @media(max-width:1100px){.studio-toolbar{gap:4px;padding-inline:8px}.wide-command{display:none}.compact-more{display:block}.toolbar-project{flex-basis:180px}.logic-launch span{display:none}}
 @media(max-width:850px){.toolbar-project{flex-basis:130px}.logic-window-label{max-width:120px;overflow:hidden;text-overflow:ellipsis}.studio-toolbar{gap:2px}.studio-brand{margin-right:0}}

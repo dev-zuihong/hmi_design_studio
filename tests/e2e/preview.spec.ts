@@ -210,7 +210,9 @@ async function openPreview(page: Page, context: BrowserContext, state: Awaited<R
   const popupPromise = context.waitForEvent('page', { timeout: 8000 })
   await previewOpenButton(page).click()
   await expect.poll(() => state.calls.filter(call => call.command === 'open_preview_window').length).toBeGreaterThan(0)
-  return popupPromise
+  const popup = await popupPromise
+  await expect(popup.locator('.preview-screen, .preview-loading')).toBeVisible({ timeout: 15000 })
+  return popup
 }
 async function openLogic(page:Page,context:BrowserContext,state:Awaited<ReturnType<typeof installDesktopMock>>){const popupPromise=context.waitForEvent('page',{timeout:8000});await page.getByRole('button',{name:/逻辑流程/}).click();await expect.poll(()=>state.calls.filter(call=>call.command==='open_logic_window').length).toBeGreaterThan(0);return popupPromise}
 
@@ -271,7 +273,7 @@ test('preview input changes reach the main window flow trigger snapshot', async 
   await expect(popup.getByRole('button', { name: /停止预览/ })).toBeVisible()
   await expect.poll(() => state.listeners.filter(listener => listener.event === 'preview-input-changed').length).toBeGreaterThanOrEqual(2)
 
-  await popup.locator('.widget-input fluent-text-input input').fill('42')
+  await popup.locator('.widget-input input').fill('42')
   await expect.poll(() => state.deliveredEvents.some(event => event.event === 'preview-input-changed' && !event.page.includes('view=preview') && event.payload.id === 'setpoint_input' && event.payload.value === '42')).toBe(true)
 
   await logic.locator('.vue-flow__node').first().click()
@@ -286,7 +288,7 @@ test('preview input changes reach the main window flow trigger snapshot', async 
 
 test('preview restores session inputs and keeps them when an unbound default changes during hot update',async({page,context})=>{
   const state=await installDesktopMock(context,page);state.snapshot.inputs.setpoint_input='会话中的目标值';await page.goto('/');const popup=await openPreview(page,context,state);await expect(popup).toHaveURL(/view=preview/)
-  const input=popup.locator('.widget-input fluent-text-input input');await expect(input).toHaveValue('会话中的目标值')
+  const input=popup.locator('.widget-input input');await expect(input).toHaveValue('会话中的目标值')
   await input.fill('刚输入的目标值');await expect.poll(()=>state.snapshot.inputs.setpoint_input).toBe('刚输入的目标值')
   const next=structuredClone(state.project),target=next.pages[0].widgets.find((widget:any)=>widget.id==='setpoint_input');target.props.value='热更新默认值'
   const operations=diffDocument(state.project,next);await page.evaluate(operations=>(window as any).__TAURI_INTERNALS__.invoke('apply_workspace_operations',{windowId:'main',operations}),operations)

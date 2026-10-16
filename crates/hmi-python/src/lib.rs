@@ -476,6 +476,18 @@ impl PythonExecutor {
         limits: PythonLimits,
         cancel: CancellationToken,
     ) -> Result<PythonResult, PythonError> {
+        self.execute_with_modules(source, message, json!([]), limits, cancel)
+            .await
+    }
+
+    pub async fn execute_with_modules(
+        &self,
+        source: &str,
+        message: Value,
+        modules: Value,
+        limits: PythonLimits,
+        cancel: CancellationToken,
+    ) -> Result<PythonResult, PythonError> {
         if !message.is_object()
             || serde_json::to_vec(&message)
                 .map_err(environment_error)?
@@ -489,7 +501,7 @@ impl PythonExecutor {
         let (result, logs) = self
             .request(
                 "execute",
-                json!({"source":source,"message":message}),
+                json!({"source":source,"message":message,"codeModules":modules}),
                 limits,
                 cancel,
             )
@@ -511,6 +523,18 @@ impl PythonExecutor {
         self.request(
             "validate",
             json!({"source":source}),
+            PythonLimits::default(),
+            CancellationToken::new(),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Compile project libraries without executing top-level code or imports.
+    pub async fn validate_modules(&self, modules: Value) -> Result<(), PythonError> {
+        self.request(
+            "validateModules",
+            json!({"codeModules":modules}),
             PythonLimits::default(),
             CancellationToken::new(),
         )

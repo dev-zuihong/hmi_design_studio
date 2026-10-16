@@ -31,4 +31,21 @@ describe('shared widget catalog and recursive layouts', () => {
     expect(layoutStyle({type:'grid',columns:3,gap:12}).gridTemplateColumns).toBe('repeat(3, minmax(0, 1fr))')
     expect(layoutItemStyle({grow:2,row:1,column:2,rowSpan:2,columnSpan:3},{type:'grid'})).toMatchObject({flexGrow:2,gridRow:'2 / span 2',gridColumn:'3 / span 3'})
   })
+  it('fills the main axis for row and column flex layouts, including explicit direction', () => {
+    const widget=createWidget('button')
+    widget.layoutItem={size:{width:{mode:'fill'},height:{mode:'fill'}}}
+    expect(widgetBoxStyle(widget,{type:'horizontal'})).toMatchObject({width:undefined,height:undefined,flexGrow:1})
+    expect(widgetBoxStyle(widget,{type:'vertical'})).toMatchObject({width:undefined,height:undefined,flexGrow:1})
+    expect(widgetBoxStyle(widget,{type:'horizontal',direction:'column'})).toMatchObject({width:undefined,height:undefined,flexGrow:1})
+    expect(widgetBoxStyle(widget,{type:'vertical',direction:'row'})).toMatchObject({width:undefined,height:undefined,flexGrow:1})
+  })
+  it('preserves explicit fixed and content sizes across stretch directions', () => {
+    const widget=createWidget('button')
+    widget.layoutItem={size:{width:{mode:'fixed',value:180},height:{mode:'fit'}}}
+    expect(widgetBoxStyle(widget,{type:'vertical'})).toMatchObject({width:'180px',height:'fit-content'})
+    expect(widgetBoxStyle(widget,{type:'horizontal',direction:'row-reverse'})).toMatchObject({width:'180px',height:'fit-content'})
+    widget.layoutItem={align:'center',size:{width:{mode:'fill'},height:{mode:'fixed',value:32}}}
+    expect(widgetBoxStyle(widget,{type:'vertical'})).toMatchObject({height:'32px',alignSelf:'stretch'})
+    expect(layoutStyle({type:'grid',rows:2}).gridTemplateRows).toBe('repeat(2, minmax(0, 1fr))')
+  })
 })

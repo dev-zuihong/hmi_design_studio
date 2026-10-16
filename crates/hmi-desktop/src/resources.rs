@@ -243,7 +243,11 @@ impl Resources {
     }
     pub fn backends(&self) -> PathBuf {
         let target = self.root.join("backends").join(hmi_core::host_target());
-        if target.exists() { target } else { self.root.join("backends") }
+        if target.exists() {
+            target
+        } else {
+            self.root.join("backends")
+        }
     }
     pub fn template(&self) -> PathBuf {
         self.root.join("templates").join(release_platform())
@@ -322,6 +326,12 @@ pub async fn check_python(
         return Err("Python 依赖锁与项目不一致，请重新导入对应资源".into());
     }
     let executor = PythonExecutor::new(env);
+    if !project.code_modules.is_empty() {
+        executor
+            .validate_modules(serde_json::to_value(&project.code_modules).map_err(error)?)
+            .await
+            .map_err(error)?;
+    }
     let memory_mb = project
         .flows
         .iter()
@@ -355,15 +365,19 @@ pub async fn check_python(
         })
         .await
         .map_err(error)?;
+    let mut validated_sources = std::collections::HashSet::new();
     for flow in &project.flows {
         for node in flow.nodes.iter().filter(|n| n.kind == "python") {
+            let source = node
+                .config
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !validated_sources.insert(source) {
+                continue;
+            }
             executor
-                .validate_source(
-                    node.config
-                        .get("code")
-                        .and_then(Value::as_str)
-                        .unwrap_or(""),
-                )
+                .validate_source(source)
                 .await
                 .map_err(|e| format!("流程 {} / 节点 {}: {e}", flow.name, node.label))?;
         }

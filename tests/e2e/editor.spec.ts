@@ -6,7 +6,8 @@ test('designer adds, edits, duplicates, undoes and reloads a saved project', asy
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
   await expect(page.locator('.dock-status')).toHaveAttribute('title', '浏览器设计模式')
-  expect(await page.evaluate(() => ['fluent-button','fluent-text-input','fluent-switch','fluent-dropdown'].every(tag => !!customElements.get(tag)))).toBe(true)
+  await expect(page.locator('fluent-button,fluent-text-input,fluent-switch,fluent-dropdown')).toHaveCount(0)
+  await expect(page.locator('.base-button').first()).toBeVisible()
   const widgets = page.locator('.design-widget')
   const count = await widgets.count()
   await placeWidget(page,'文本')
@@ -32,6 +33,7 @@ test('canvas drag and resize change persisted geometry', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
+  await placeWidget(page, '文本')
   const widget = page.locator('.design-widget').first()
   const before = await widget.evaluate(el => ({ transform: (el as HTMLElement).style.transform, width: (el as HTMLElement).style.width }))
   const bounds = (await widget.boundingBox())!
@@ -70,17 +72,10 @@ test('flow ports can be joined with an actual pointer drag', async ({ page }) =>
   expect(errors).toEqual([])
 })
 
-test('flow editor loads and creates an editable Python flow without executing devices', async ({ page }) => {
-  const errors: string[] = []
-  page.on('pageerror', error => errors.push(error.message))
+test('new workspace starts blank and has no built-in example entry', async ({ page }) => {
   await page.goto('/')
-  await page.getByRole('button', { name: '文件', exact: true }).click()
-  const opening=page.waitForEvent('popup')
-  await page.getByRole('button', { name: '添加 Python 示例流程', exact: true }).click()
-  const logic=await opening
-  await expect(logic.locator('.vue-flow__node')).toHaveCount(6)
-  await logic.screenshot({ path: 'artifacts/flow-editor.png', fullPage: true })
-  await page.getByRole('button', { name: '预览运行', exact: true }).click()
-  await expect(page.getByRole('status')).toContainText('浏览器模式支持设计')
-  expect(errors).toEqual([])
+  await expect(page.locator('.design-canvas .widget-view')).toHaveCount(0)
+  await expect(page.locator('.page-item')).toHaveCount(1)
+  await page.locator('[data-menu-trigger="file"]').click()
+  await expect(page.locator('.studio-menu button')).toHaveCount(9)
 })

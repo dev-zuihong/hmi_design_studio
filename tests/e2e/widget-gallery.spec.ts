@@ -40,11 +40,11 @@ test('project locale translates component text, options and table headers',async
   await expect(page.getByText('First page title')).toBeVisible()
   await expect(page.getByRole('button',{name:'Overview'})).toBeVisible()
   await expect(page.locator('.widget-table th').nth(1)).toHaveText('Name')
-  await expect(page.locator('fluent-dropdown fluent-option').first()).toHaveText('Device A')
+  await expect(page.locator('.widget-select select option:not([value=""])').first()).toHaveText('Device A')
 })
 test('restores unbound session input and keeps a value binding above stale input snapshots',async({page})=>{
   await page.goto('/tests/e2e/widget-harness.html')
-  const inputs=page.locator('.widget-input fluent-text-input input')
+  const inputs=page.locator('.widget-input input')
   await expect(inputs).toHaveCount(2)
   await expect(inputs.nth(0)).toHaveValue('会话输入')
   await expect(inputs.nth(1)).toHaveValue('绑定值')

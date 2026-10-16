@@ -1,117 +1,44 @@
 # HMI Design Studio
 
-用于 Windows 10/11 x64 与 macOS 14+（arm64、x86_64）的上位机界面与流程设计器：Vue 3、Fluent UI Web Components、Vue Flow、Tauri 2、Rust。拖拽控件，配置串口和协议插件，连接流程节点，通过 Python 代码处理消息，再导出包含 UI 和后端的独立运行包。macOS 两种架构分别在对应架构的 Mac 上原生构建，不提供 universal 二进制。
+用于 Windows 10/11 x64 的上位机界面与流程设计器，采用 Tauri 2、Vue 3/TypeScript、自有 Vue 组件、借鉴 Penpot 的本地设计系统、Vue Flow 和 Rust。支持拖拽界面、通信资源、数据绑定、流程块及同步 Python 代码块，并可导出包含界面和后端的独立运行包。
 
-当前实施与验证范围见 [验证记录](docs/VERIFICATION.md)。设计方案见 [PLAN.md](docs/PLAN.md)，所有源码改动按 [CHANGELOG.md](docs/CHANGELOG.md) 与 Git 提交留痕。
+当前默认创建空白工程，不再提供内置示例、演示协议插件或 PTB demo。已有工程仍可打开；通信、通用 USB Printer 传输和用户导入的协议插件继续可用。方案见 [PLAN.md](docs/PLAN.md)，能力说明见 [DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)，实际验证及边界见 [VERIFICATION.md](docs/VERIFICATION.md)。所有源码改动按 [CHANGELOG.md](docs/CHANGELOG.md) 与 Git 留痕。
 
-## Windows 开发运行
+## Windows 开发
 
-需要 Windows x64、Node.js 24、Rust MSVC 工具链、Visual Studio C++ Build Tools。Python 节点运行资源由准备脚本下载，应用不会调用系统 Python。
+需要 Windows x64、Node.js 24、Rust MSVC 和 Visual Studio C++ Build Tools。
 
 ```powershell
-npm ci
-npm run prepare:python
-cargo build -p demo-protocol
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage-dev.ps1
-npm run desktop
+pnpm install
+pnpm tauri dev
 ```
 
-`npm run dev` 只启动浏览器编辑器，可编辑、保存完整 `.hmiproj` 工程包和校验结构；串口、Python、实际流程执行和独立程序导出需要桌面应用。所有模拟连接明确使用 `sim://temperature`。
+根目录的 `tauri` 脚本进入 `apps/studio`；直接执行 `pnpm exec tauri dev` 会绕过此入口。浏览器模式使用 `pnpm dev`，支持设计和工程包编辑；真实通信、Python 和独立程序导出使用桌面应用。
 
-使用 pnpm 时，在仓库根目录执行 `pnpm install` 安装依赖，再执行 `pnpm tauri dev` 启动设计器，也可使用 `pnpm desktop`。设备预览和导出所需的本地运行资源按上述步骤准备。根目录的 `tauri` 脚本明确进入 `apps/studio`，避免多应用仓库的 CLI 自动发现选中 `apps/runner`。`pnpm exec tauri dev` 会绕过该脚本；需要直接调用 CLI 时，先进入 `apps/studio`。
+预览需要 Runner 模板，首次可执行 `scripts/stage-dev.ps1` 构建并暂存。使用 Python 节点前按 [Python 资源说明](resources/python/README.md) 准备固定运行资源；程序不调用系统 Python，也不在目标机器运行 pip。
 
 ## 设计与运行
 
-设计器采用紧凑单行工具栏。底部资源栏默认收起，点击“设备连接 / 项目变量 / 执行记录 / 检查”展开，再点当前标签收起；拖动侧栏或底栏边界调整空间。界面窗和逻辑窗分别记住布局，可在右上角“工作区设置”恢复默认、切换设计器语言或显示侧栏。“工程语言”位于文件菜单。
+1. 新建空白工程或打开已有 `.hmiproj`。从组件库拖放控件，设置属性、布局、绑定和事件；右键和工具栏提供复制、对齐、层级与布局操作。
+2. 在“设计系统”管理令牌、主题、主组件、实例、变体和离线库。页面与容器支持绝对定位、Flex 和 Grid，设计器、预览与 Runner 使用共享渲染。
+3. 在资源栏添加串口或通用传输资源，按需导入自己的协议插件。通过“逻辑流程”连接流程节点，用 Python 节点及工程代码库补充业务逻辑。
+4. “预览运行”打开独立 Runner；有效修改可热更新。界面窗和逻辑窗共享工程，各自保留撤销与布局状态。
+5. “保存工程包”保存页面、流程、代码、素材、语言和已导入依赖。“导出程序”生成 Windows x64 运行 ZIP，完整解压后启动 `HmiRunner.exe`。
 
-组件库支持中英文及类型检索；属性面板的常用内容和位置尺寸默认展开，其余分组按需展开。搜索属性会展开命中的分组，清空后恢复原状态；画布上方集中提供复制、删除、对齐和布局操作。设备高级串口、协议参数和 Python 执行限制也可按需展开。布局调整仅保存在本机，不修改工程或触发预览热更新。
+通信与流程停止遵循事务收尾规则；Python 每次调用使用独立进程，并以 Windows Job Object 管理超时、取消和内存。协议插件与 Python 运行面向可信工程，以当前用户权限执行。仅工程含 Python 节点时，运行包才携带固定 Python；插件自身依赖按其清单发布。
 
-1. 打开示例、旧 JSON 或 `.hmiproj`，也可新建工程。将组件拖到画布释放定位，或点击组件库后再点击画布放置；Esc 取消。右键提供复制、层级、对齐、布局和绑定操作。
-2. 组件支持嵌套容器、水平/垂直/网格/表单布局、选项卡、表格、树、对话框和共享动作；属性可搜索、批量修改、恢复默认、配置翻译词条和有类型的业务属性。自动布局页面可随运行窗口重新排布，绝对定位页面按设计尺寸等比适配。滚轮在画布缩放，空格/中键平移；标尺可拖出辅助线，侧栏与底栏可调整和滚动。
-3. 在资源面板配置连接及协议。示例 `demo-temperature` 提供 `read`、`setTarget`；使用 `sim://temperature` 可无硬件演示。打开“逻辑流程”独立窗口，与界面同时编辑；每个窗口独立撤销/重做，共享保存状态。
-4. 点击“预览运行”启动独立 Runner 子进程。编辑器保持可编辑，修改停顿 300 毫秒后校验并热更新；无效候选不影响最近有效版本。旧任务按旧逻辑完成，新任务使用新版；连接配置、变量类型/枚举值域或 Python 环境配置变更等待旧任务和事务结束。重复打开聚焦同一预览，关闭主窗会停止预览及设备会话。
-5. Python 节点使用包内解释器执行同步 `def transform(msg)`，每次调用独立进程。按 [Python 资源说明](resources/python/README.md) 准备并导入离线资源。默认超时 5 秒、预算 256 MiB；Windows Job 限制提交内存，macOS 采样进程组 RSS。
-6. “保存工程包”生成 `.hmiproj`，包含全部界面/流程/代码、图片字体、语言表及工程使用的已导入插件/Python 依赖。复制包即可继续编辑；未导入的平台变体明确标记缺失。设计器和项目界面可分别切换语言，项目翻译表可导入/导出 JSON/CSV。
-7. “导出程序”生成当前平台的 ZIP，完整解压后启动 `HmiRunner.exe`（Windows）或 `HmiRunner.app`（macOS）。Runner 可切换项目语言及设备端口；设置与日志位于当前用户数据目录。工程包和可执行运行包是两个独立入口。
-
-依赖更新请通过导入菜单并保存相应运行资源摘要/锁；不支持直接替换缓存文件来触发热更新，协议插件替换后需重新打开预览。
-
-Python 及协议插件以当前用户权限执行，面向可信项目，不是权限沙箱。运行日志包含节点输入输出，位于当前用户目录。Windows 使用 Job Object 管理 Python 进程树与提交内存；macOS 以进程组管理进程，并按进程组采样 RSS 作为近似内存预算。
-
-## 构建交付
-
-PTB 示例使用通用组件和可编辑流程复现设备工作台、六页设置及 C1–C7 协议。Windows x64 构建需额外安装 .NET 10 SDK 与 NativeAOT 工具链：
+## 构建与验证
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-ptb-demo.ps1
-```
-
-输出 `ING-PTB.hmiproj` 和 `ING-PTB-win-x64.zip`，默认模拟三台设备。完整解压运行包后启动 `HmiRunner.exe`；停止会话后可在连接设置中明确选择 USB 模式。目标机器无需 .NET 或 Python。示例源、组件接口、文件导入导出及实际硬件验收边界见 [PTB 使用说明](docs/ING-PTB.md)。
-
-```powershell
-npm run build:desktop
-```
-
-构建脚本准备固定 Python 与 WebView2、构建 Windows x64 程序、生成 Runner 模板，并将设计器放入 `artifacts/HmiStudio-win-x64-时间/`。下载资源可在开发机器准备后离线复用；目标机器不需要 Node.js、Rust、Python、pip 或编译器。首次构建会下载依赖和固定 WebView2。
-
-构建前关闭本项目的 Vite 开发服务器；`npm ci` 会重建依赖目录，运行中的开发服务器在 Windows 上会占用原生模块文件。
-
-依赖已按锁文件安装且未变更时，可用 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -SkipInstall` 省略重新安装。该选项仍重新构建前端、Rust 程序及交付目录。
-
-设计器导出使用预编译 Runner 模板。任何流程中出现 Python 节点（包括未启用流程），运行包才会加入一份 Python；插件自身携带的依赖完整保留。导出包带 SHA-256 文件清单，遇到缺资源、插件版本不符、Python 依赖锁不符或无效流程时阻止导出。
-
-## macOS 开发与构建
-
-需要 macOS 14 或更新版本、Node.js 24、Rust、Xcode Command Line Tools；准备 Python 资源还需开发环境中的 Python 3.12+ 与 pip。Apple Silicon 机器构建 arm64；Intel 机器构建 x86_64。运行资源按目标架构准备；固定归档可跨架构下载，实际导入与执行仍须在对应架构的 Mac 上验证：
-
-```sh
-npm ci
-npm run prepare:python:macos
-npm run desktop:macos
-```
-
-`npm run stage:dev:macos` 构建并暂存当前架构的示例插件、CLI 和用于独立预览的 Runner 模板；`npm run desktop:macos` 再启动 Studio 开发版。创建发布版 Studio.app、Runner.app 模板、CLI 和示例插件：
-
-```sh
-npm run build:macos
-```
-
-成品位于 `artifacts/HMIStudio-macos-arm64-时间/` 或 `artifacts/HMIStudio-macos-x64-时间/`。Runner 模板路径为 `.cache/templates/macos-arm64/HmiRunner.app` 或 `.cache/templates/macos-x64/HmiRunner.app`。构建后应用使用 ad-hoc 签名，便于本机启动和验证；未进行 Developer ID 签名、公证或跨架构打包。Python 代码节点的 macOS 进程组 RSS 限制是近似值，不等价于 Windows Job Object 的提交内存硬限制。
-
-可用 macOS verifier 安全解压并检查 ZIP 清单、所有文件哈希、符号链接目标、可执行权限、Runner 签名以及 Python 资源和项目锁：
-
-```sh
-python3 scripts/verify-package-macos.py artifacts/temperature-macos.zip \
-  --directory artifacts/temperature-runtime-check --python absent \
-  --cli artifacts/HMIStudio-macos-arm64-时间/hmi-cli --expected-temperature 23.6
-```
-
-含 Python 节点的包将 `--python` 改为 `stdlib` 或 `present`；`--native` 可额外检查第三方原生扩展架构。验证目录须是新的路径，脚本不会覆盖已有目录。`npm run test:native:macos` 只检查 Studio/Runner 原生进程能启动并保持运行，不覆盖应用正常退出和 Rust 会话收尾验收。
-
-手动重复原生启动检查时，传入实际构建目录：
-
-```sh
-npm run test:native:macos -- \
-  --studio "artifacts/HMIStudio-macos-arm64-时间/HMI Design Studio.app" \
-  --runner "artifacts/HMIStudio-macos-arm64-时间/HmiRunner.app"
-```
-
-## 验证与命令行工具
-
-```powershell
-npm run build
-npm test
-npm run test:e2e
-npm run test:native:preview:macos
+pnpm build
+pnpm test
+pnpm test:e2e
 cargo test --workspace
-python -B -m unittest discover -s resources/python -p test_*.py
-cargo run -p hmi-desktop --bin hmi-cli -- validate --project resources/example/project.json
-cargo run -p hmi-desktop --bin hmi-cli -- smoke --project resources/example/project.json
-cargo run -p hmi-desktop --bin hmi-cli -- export --project resources/example/project.json --destination artifacts/temperature.zip
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -SkipInstall
 ```
 
-命令行验证、模拟运行和导出使用桌面应用同一个 Rust 服务。`smoke` 只接受显式模拟端口，避免自动操作真实设备。导出前先通过对应平台构建脚本准备模板；固定 WebView2 仅用于 Windows。
+完整构建会准备固定 WebView2 和按需 Python 资源，生成设计器、CLI 与 Runner 模板；发行目录不再附带示例工程或示例插件。依赖未安装时去掉 `-SkipInstall`。构建前关闭占用本项目构建输出的开发进程。
 
-`test:native:preview:macos` 使用专用 debug feature 构建 Studio 和 Runner，在实际 WKWebView 中检查独立进程 PID、同时打开的界面/逻辑/预览窗口、模拟控件、版本热更新、资源等待及主窗退出清理。普通交付构建不包含该测试入口；实际执行结果和未覆盖环境见验证记录。
+`hmi-cli` 提供 `validate`、`smoke`、`package` 和 `export`，通过 `--project` 指定自己的工程。包文件集合与摘要可使用 `scripts/verify-package.py` 校验。接口见 [IMPLEMENTATION.md](docs/IMPLEMENTATION.md)，协议扩展见 [PROTOCOL-PLUGINS.md](docs/PROTOCOL-PLUGINS.md)。
 
-模块约定见 [IMPLEMENTATION.md](docs/IMPLEMENTATION.md)，协议扩展见 [插件接口](crates/demo-protocol/README.md)。代码入口：`src/`（设计器/共享渲染），`crates/hmi-core/`（流程/串口/插件），`crates/hmi-python/`（Python），`crates/hmi-desktop/`（桌面命令/发布），`apps/`（两个程序）。
+本轮仅构建和交付 Windows x64。已有 macOS 源码与构建脚本保留兼容，本轮没有 macOS 验收；真实硬件、Windows 10、干净机器和长期运行范围以验证记录为准。

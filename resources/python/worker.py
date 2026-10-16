@@ -15,14 +15,54 @@ if sys.platform == "darwin":
 import ast
 import ctypes
 import importlib
+import importlib.abc
+import importlib.util
 import inspect
 import io
 import json
+import keyword
 import math
 import traceback
 import types
 
 MAX_MESSAGE_BYTES = 1024 * 1024
+
+
+def compile_modules(modules):
+    if not isinstance(modules, list):
+        raise TypeError("codeModules must be an array")
+    compiled = {}
+    total = 0
+    for module in modules:
+        name, source = module["name"], module["source"]
+        if (not isinstance(name, str) or not name.isascii() or not name.isidentifier()
+                or keyword.iskeyword(name) or name in sys.stdlib_module_names
+                or name in compiled):
+            raise ValueError("Invalid, reserved or duplicate project module name: " + str(name))
+        if not isinstance(source, str) or len(source.encode("utf-8")) > MAX_MESSAGE_BYTES:
+            raise ValueError("Project module source exceeds 1 MiB")
+        total += len(source.encode("utf-8"))
+        if total > 2 * MAX_MESSAGE_BYTES:
+            raise ValueError("Project module sources exceed 2 MiB")
+        compiled[name] = compile(source, "<project-module:" + name + ">", "exec")
+    return compiled
+
+
+class ProjectModules(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Load the immutable source revision sent for this single invocation."""
+    def __init__(self, compiled):
+        self.compiled = compiled
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in self.compiled:
+            return importlib.util.spec_from_loader(fullname, self)
+        return None
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        exec(self.compiled[module.__name__], module.__dict__)
 
 
 def isolate_output():
@@ -101,6 +141,9 @@ def dispatch(method, params):
     if method == "validate":
         validate_source(params["source"])
         return {"valid": True}
+    if method == "validateModules":
+        compile_modules(params.get("codeModules", []))
+        return {"valid": True}
     if method == "imports":
         modules = params.get("modules", [])
         for module in modules:
@@ -112,6 +155,8 @@ def dispatch(method, params):
     if type(msg) is not dict:
         raise TypeError("Input message must be a dictionary")
     code = validate_source(params["source"])
+    compiled_modules = compile_modules(params.get("codeModules", []))
+    sys.meta_path.insert(0, ProjectModules(compiled_modules))
     namespace = {"__name__": "__hmi_node__"}
     exec(code, namespace, namespace)
     transform = namespace.get("transform")

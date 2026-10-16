@@ -51,6 +51,7 @@ export class BrowserProjectPackage {
     const bytes=await writer.close();await this.persistResources();return new Blob([new Uint8Array(bytes).buffer],{type:'application/vnd.hmi.project+zip'})
   }
   async addAsset(file:File,project:Project){await this.ensureResources(project);const extension=file.name.split('.').at(-1)?.toLowerCase()??'bin',id=`asset_${crypto.randomUUID().replaceAll('-','')}`,path=`assets/${id}.${extension}`;this.files.set(path,new Uint8Array(await file.arrayBuffer()));await this.persistResources();return{id,path}}
+  async addAssetBytes(name:string,bytes:Uint8Array,project:Project){await this.ensureResources(project);const extension=name.split('.').at(-1)?.toLowerCase()??'bin',id=`asset_${crypto.randomUUID().replaceAll('-','')}`,path=`assets/${id}.${extension}`;this.files.set(path,new Uint8Array(bytes));await this.persistResources();return{id,path}}
   resourceUrls(project:Project){return Object.fromEntries((project.assets??[]).map(asset=>[asset.id,this.files.has(asset.path)?URL.createObjectURL(new Blob([new Uint8Array(this.files.get(asset.path)!).buffer])):'']))}
 }
 export const browserProjectPackage=new BrowserProjectPackage()

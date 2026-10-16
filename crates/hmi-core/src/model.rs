@@ -30,6 +30,44 @@ pub struct Project {
     pub backends: Vec<BackendConfig>,
     #[serde(default)]
     pub windows: Vec<WindowTemplate>,
+    #[serde(default)]
+    pub code_modules: Vec<CodeModule>,
+    #[serde(default)]
+    pub transports: Vec<TransportConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<Presentation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_system: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModule {
+    pub id: String,
+    pub name: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransportConfig {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub interface_guid: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    #[serde(default = "default_packet_size")]
+    pub packet_size: u32,
+}
+fn default_packet_size() -> u32 {
+    64
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Presentation {
+    pub chrome: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -122,9 +160,13 @@ pub struct Widget {
     pub custom_properties: BTreeMap<String, CustomProperty>,
     #[serde(default)]
     pub editor: Option<EditorState>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub style_tokens: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_instance: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LayoutSpec {
     #[serde(rename = "type")]
@@ -135,6 +177,33 @@ pub struct LayoutSpec {
     pub padding: Option<f64>,
     #[serde(default)]
     pub columns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub justify: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_y: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding_sides: Option<BTreeMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_tracks: Option<Vec<LayoutTrack>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_tracks: Option<Vec<LayoutTrack>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutTrack {
+    pub kind: String,
+    #[serde(default)]
+    pub value: Option<f64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -159,6 +228,15 @@ pub struct LayoutItem {
     pub row_span: Option<u32>,
     #[serde(default)]
     pub column_span: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<BTreeMap<String, LayoutSize>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutSize {
+    pub mode: String,
+    #[serde(default)]
+    pub value: Option<f64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -215,14 +293,37 @@ pub struct SharedAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ValueRef {
-    Literal { value: Value },
-    Message { path: String },
-    Context { path: String },
-    Backend { key: String, path: String },
-    Variable { key: String },
-    Input { key: String },
-    Point { key: String },
-    Property { key: String, property: String },
+    Literal {
+        value: Value,
+    },
+    Message {
+        path: String,
+    },
+    Context {
+        path: String,
+    },
+    Runtime {
+        path: String,
+    },
+    Backend {
+        key: String,
+        path: String,
+    },
+    Variable {
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    Input {
+        key: String,
+    },
+    Point {
+        key: String,
+    },
+    Property {
+        key: String,
+        property: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,6 +389,8 @@ pub struct Flow {
     pub name: String,
     pub enabled: bool,
     pub timeout_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     pub nodes: Vec<FlowNode>,
     pub edges: Vec<FlowEdge>,
 }
@@ -365,6 +468,66 @@ pub fn valid_backend_path(path: &str) -> bool {
         })
 }
 
+pub fn valid_python_module_name(name: &str) -> bool {
+    let reserved = [
+        "False",
+        "None",
+        "True",
+        "and",
+        "as",
+        "assert",
+        "async",
+        "await",
+        "break",
+        "class",
+        "continue",
+        "def",
+        "del",
+        "elif",
+        "else",
+        "except",
+        "finally",
+        "for",
+        "from",
+        "global",
+        "if",
+        "import",
+        "in",
+        "is",
+        "lambda",
+        "nonlocal",
+        "not",
+        "or",
+        "pass",
+        "raise",
+        "return",
+        "try",
+        "while",
+        "with",
+        "yield",
+        "sys",
+        "os",
+        "json",
+        "ast",
+        "types",
+        "importlib",
+        "inspect",
+        "ctypes",
+        "io",
+        "math",
+        "traceback",
+        "builtins",
+        "keyword",
+    ];
+    !name.is_empty()
+        && name.len() <= 128
+        && !reserved.contains(&name)
+        && name
+            .chars()
+            .enumerate()
+            .all(|(i, c)| c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit()))
+}
+
 pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     let mut issue = |path: String, message: &str| {
@@ -374,7 +537,7 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
             message: message.into(),
         })
     };
-    if ![1, 2, 3].contains(&project.schema_version) {
+    if ![1, 2, 3, 4].contains(&project.schema_version) {
         issue("schemaVersion".into(), "不支持此项目格式版本");
     }
     if !safe_identifier(&project.id) {
@@ -423,7 +586,75 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
     for (i, window) in project.windows.iter().enumerate() {
         check_id(&window.id, format!("windows[{i}].id"));
     }
+    for (i, module) in project.code_modules.iter().enumerate() {
+        check_id(&module.id, format!("codeModules[{i}].id"));
+    }
+    for (i, transport) in project.transports.iter().enumerate() {
+        check_id(&transport.id, format!("transports[{i}].id"));
+    }
     drop(check_id);
+    if project.schema_version < 4
+        && (!project.code_modules.is_empty()
+            || !project.transports.is_empty()
+            || project.presentation.is_some())
+    {
+        issue(
+            "schemaVersion".into(),
+            "工程代码库、传输资源和工程外观需要格式版本 4",
+        );
+    }
+    if project.schema_version < 4
+        && project
+            .flows
+            .iter()
+            .flat_map(|flow| &flow.nodes)
+            .any(|node| node.kind == "file.importCompanions")
+    {
+        issue(
+            "schemaVersion".into(),
+            "file.importCompanions 节点要求 schemaVersion 4",
+        );
+    }
+    let mut module_names = HashSet::new();
+    let mut source_bytes = 0;
+    for (i, module) in project.code_modules.iter().enumerate() {
+        source_bytes += module.source.len();
+        if !valid_python_module_name(&module.name)
+            || !module_names.insert(&module.name)
+            || module.source.len() > 1024 * 1024
+        {
+            issue(
+                format!("codeModules[{i}]"),
+                "代码库导入名称无效、重复或源码超过 1 MiB",
+            );
+        }
+    }
+    if source_bytes > 2 * 1024 * 1024 {
+        issue("codeModules".into(), "工程代码库源码合计不得超过 2 MiB");
+    }
+    for (i, transport) in project.transports.iter().enumerate() {
+        let guid = transport.interface_guid.trim_matches(['{', '}']);
+        if transport.kind != "usb-printer"
+            || guid.len() != 36
+            || guid.chars().any(|c| !c.is_ascii_hexdigit() && c != '-')
+            || !(1..=65536).contains(&transport.packet_size)
+        {
+            issue(
+                format!("transports[{i}]"),
+                "传输类型、接口 GUID 或包尺寸无效",
+            );
+        }
+    }
+    if project
+        .presentation
+        .as_ref()
+        .is_some_and(|p| !["project", "host"].contains(&p.chrome.as_str()))
+    {
+        issue(
+            "presentation.chrome".into(),
+            "运行界面外观必须为 project 或 host",
+        );
+    }
     if project.schema_version < 3 && (!project.backends.is_empty() || !project.windows.is_empty()) {
         issue("schemaVersion".into(), "后端与窗口模板需要工程格式版本 3");
     }
@@ -486,6 +717,9 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
         .map(|action| action.id.as_str())
         .collect();
     let check_action = |action: &UiAction| {
+        if action.kind == "runtimeRetry" {
+            return true;
+        }
         if action.kind == "shared" {
             return action
                 .action_id
@@ -515,11 +749,14 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
     let check_ref = |value: &ValueRef| match value {
         ValueRef::Literal { .. } => true,
         ValueRef::Message { path } => valid_message_path(path),
-        ValueRef::Context { path } => valid_message_path(path),
+        ValueRef::Context { path } => path.is_empty() || valid_message_path(path),
+        ValueRef::Runtime { path } => ["state", "error", "locale"].contains(&path.as_str()),
         ValueRef::Backend { key, path } => {
             backends.contains(key.as_str()) && valid_backend_path(path)
         }
-        ValueRef::Variable { key } => vars.contains(key.as_str()),
+        ValueRef::Variable { key, path } => {
+            vars.contains(key.as_str()) && path.as_deref().map_or(true, valid_backend_path)
+        }
         ValueRef::Input { key } => widgets.contains(key.as_str()),
         ValueRef::Point { key } => valid_point(key),
         ValueRef::Property { key, property } => {
@@ -756,6 +993,12 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
     }
     for (i, f) in project.flows.iter().enumerate() {
         let fp = format!("flows[{i}]");
+        if f.scope
+            .as_deref()
+            .is_some_and(|s| !["window", "device"].contains(&s))
+        {
+            issue(format!("{fp}.scope"), "流程作用域无效");
+        }
         if f.timeout_ms == 0 || f.timeout_ms > 86_400_000 {
             issue(
                 format!("{fp}.timeoutMs"),
@@ -784,7 +1027,7 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
                     .and_then(|value| serde_json::from_value::<ValueRef>(value).ok())
             };
             let valid = match n.kind.as_str() {
-                "trigger.ui" => true,
+                "trigger.ui" | "trigger.start" => true,
                 "trigger.timer" => {
                     number("intervalMs").is_some_and(|v| (100..=86_400_000).contains(&v))
                 }
@@ -793,8 +1036,26 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
                     text("backendId").is_some_and(|id| backends.contains(id))
                         && text("event").map_or(true, |v| !v.is_empty())
                 }
-                "backend.invoke" | "window.open" | "window.close" | "window.focus"
-                | "file.open" | "file.save" => {
+                "backend.invoke"
+                | "window.open"
+                | "window.close"
+                | "window.focus"
+                | "file.open"
+                | "file.save"
+                | "file.resolve"
+                | "file.workspace"
+                | "file.register"
+                | "file.importCompanions"
+                | "state.load"
+                | "state.save"
+                | "transport.enumerate"
+                | "transport.open"
+                | "transport.close"
+                | "transport.exchange"
+                | "transport.exchangeMany"
+                | "transport.cancel"
+                | "transport.recover"
+                | "transport.completeEffect" => {
                     (n.kind != "backend.invoke"
                         || (text("backendId").is_some_and(|id| backends.contains(id))
                             && text("operation").is_some_and(|v| !v.trim().is_empty())))
@@ -839,9 +1100,31 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
                 "variable.set" => {
                     text("variableId").is_some_and(|id| vars.contains(id)) && reference("value")
                 }
+                "flow.dispatch" => {
+                    text("flowId").is_some_and(|id| flows.contains_key(id)) && reference("items")
+                }
+                "flow.cancel" => {
+                    text("flowId").is_some_and(|id| flows.contains_key(id)) && reference("context")
+                }
                 "delay" => number("durationMs").is_some_and(|v| v <= 86_400_000),
                 "python" => {
                     text("code").is_some_and(|v| !v.trim().is_empty() && v.len() <= 1024 * 1024)
+                        && text("stateVariable").map_or(true, |id| {
+                            vars.contains(id)
+                                && project
+                                    .variables
+                                    .iter()
+                                    .any(|v| v.id == id && v.value_type == "object")
+                        })
+                        && n.config.get("args").map_or(true, |v| {
+                            v.as_object().is_some_and(|args| {
+                                args.values().all(|v| {
+                                    serde_json::from_value::<ValueRef>(v.clone())
+                                        .ok()
+                                        .is_some_and(|r| check_ref(&r))
+                                })
+                            })
+                        })
                         && number("timeoutMs").map_or(!n.config.contains_key("timeoutMs"), |v| {
                             (1..=86_400_000).contains(&v)
                         })
@@ -875,7 +1158,7 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
                     let reference = reference_value("value");
                     let hint = reference.as_ref().and_then(|reference| match reference {
                         ValueRef::Literal { value } => Some(value.clone()),
-                        ValueRef::Variable { key } => project
+                        ValueRef::Variable { key, path: None } => project
                             .variables
                             .iter()
                             .find(|variable| variable.id == *key)
@@ -990,6 +1273,7 @@ pub fn validate_project(project: &Project) -> Vec<ValidationIssue> {
     {
         issue("python".into(), "Python 节点需要指定运行资源");
     }
+    issues.extend(crate::design_system::validate(project));
     issues
 }
 
@@ -1027,6 +1311,26 @@ mod schema_v2_tests {
             serde_json::from_value(serde_json::to_value(current).unwrap()).unwrap();
         assert_eq!(round_trip.schema_version, 2);
         assert_eq!(round_trip.variables[0].value_type, "array");
+    }
+
+    #[test]
+    fn file_import_companions_is_a_schema_four_host_action() {
+        let mut project: Project = serde_json::from_value(json!({
+            "schemaVersion":4,"id":"files","name":"Files","width":800,"height":600,
+            "pages":[{"id":"page","name":"Page","widgets":[]}],
+            "flows":[{"id":"flow","name":"Flow","enabled":true,"timeoutMs":1000,"nodes":[{"id":"import","kind":"file.importCompanions","label":"Import companions","position":{"x":0,"y":0},"config":{"args":{"resourceId":{"source":"literal","value":"file_a"},"paths":{"source":"literal","value":["fw/a.bin"]}}}}],"edges":[]}]
+        })).unwrap();
+        assert!(
+            validate_project(&project)
+                .iter()
+                .all(|issue| issue.severity != "error"),
+            "{:?}",
+            validate_project(&project)
+        );
+        project.schema_version = 3;
+        assert!(validate_project(&project)
+            .iter()
+            .any(|issue| issue.path == "schemaVersion"));
     }
 
     #[test]

@@ -2,8 +2,8 @@ use crate::resources::*;
 use async_trait::async_trait;
 use hmi_core::backend::{BackendManager, BackendResource};
 use hmi_core::{
-    ConnectionManager, CoreError, CoreResult, HostServices, Project, Runtime, RuntimeEvent,
-    ValidationIssue,
+    CodeModule, ConnectionManager, CoreError, CoreResult, HostServices, Project, Runtime,
+    RuntimeEvent, ValidationIssue,
 };
 use hmi_python::{PythonExecutor, PythonLimits};
 use serde_json::{json, Value};
@@ -52,6 +52,7 @@ struct Services {
     python: tokio::sync::RwLock<Option<PythonExecutor>>,
     runtime: Mutex<Weak<Runtime>>,
     backends: tokio::sync::RwLock<Arc<BackendManager>>,
+    flow_services: Arc<crate::flow_services::FlowServices>,
     host_actions: tokio::sync::RwLock<Option<tokio::sync::mpsc::Sender<HostActionRequest>>>,
 }
 #[async_trait]
@@ -78,6 +79,9 @@ impl HostServices for Services {
         context: Value,
         cancel: CancellationToken,
     ) -> CoreResult<Value> {
+        if crate::flow_services::FlowServices::supports(kind) {
+            return self.flow_services.action(kind, args, cancel).await;
+        }
         let sender = self
             .host_actions
             .read()
@@ -130,16 +134,30 @@ impl HostServices for Services {
         memory_mb: u64,
         cancel: CancellationToken,
     ) -> CoreResult<Option<Value>> {
+        self.python_with_modules(source, msg, &[], timeout_ms, memory_mb, cancel)
+            .await
+    }
+    async fn python_with_modules(
+        &self,
+        source: &str,
+        mut msg: Value,
+        modules: &[CodeModule],
+        timeout_ms: u64,
+        memory_mb: u64,
+        cancel: CancellationToken,
+    ) -> CoreResult<Option<Value>> {
         let executor = self
             .python
             .read()
             .await
             .clone()
             .ok_or_else(|| CoreError::new("PYTHON_MISSING", "未加载项目 Python 环境"))?;
-        let result = executor
-            .execute(
+        msg["host"] = self.flow_services.python_host();
+        let mut result = executor
+            .execute_with_modules(
                 source,
                 msg,
+                serde_json::to_value(modules)?,
                 PythonLimits {
                     timeout: Duration::from_millis(timeout_ms),
                     memory_bytes: (memory_mb * 1024 * 1024) as usize,
@@ -148,6 +166,9 @@ impl HostServices for Services {
             )
             .await
             .map_err(|e| CoreError::new("PYTHON", e.to_string()))?;
+        if let Some(Value::Object(message)) = result.message.as_mut() {
+            message.remove("host");
+        }
         if !result.logs.is_empty() {
             if let Some(runtime) = self.runtime.lock().unwrap().upgrade() {
                 runtime.publish_event(RuntimeEvent::new(
@@ -176,6 +197,11 @@ impl Session {
         };
         let resource_map = backend_resources(&asset_resources, &project)?;
         let identity = backend_identity(&resources, &project, &resource_map)?;
+        let flow_services = crate::flow_services::FlowServices::new(
+            &project.id,
+            project.transports.clone(),
+            resource_map.clone(),
+        )?;
         let backends =
             BackendManager::new(project.backends.clone(), resources.backends(), resource_map);
         let host = Arc::new(Services {
@@ -183,10 +209,12 @@ impl Session {
             python: tokio::sync::RwLock::new(python),
             runtime: Mutex::new(Weak::new()),
             backends: tokio::sync::RwLock::new(backends.clone()),
+            flow_services: flow_services.clone(),
             host_actions: tokio::sync::RwLock::new(None),
         });
         let runtime = Runtime::new(project, host.clone()).map_err(error)?;
         *host.runtime.lock().unwrap() = Arc::downgrade(&runtime);
+        flow_services.set_runtime(Arc::downgrade(&runtime));
         let bridge_cancel = CancellationToken::new();
         let mut events = connections.subscribe();
         let cancel = bridge_cancel.clone();
@@ -255,6 +283,22 @@ impl Session {
     pub async fn backend_manager(&self) -> Arc<BackendManager> {
         self.services.backends.read().await.clone()
     }
+    pub fn flow_services(&self) -> Arc<crate::flow_services::FlowServices> {
+        self.services.flow_services.clone()
+    }
+    pub fn file_resource(&self, id: &str) -> CoreResult<BackendResource> {
+        self.services.flow_services.resource(id)
+    }
+    pub async fn register_file_resource(
+        &self,
+        id: String,
+        resource: BackendResource,
+    ) -> CoreResult<()> {
+        self.services
+            .flow_services
+            .register_resource(id.clone(), resource.clone())?;
+        self.backend_manager().await.register_resource(id, resource)
+    }
 
     pub async fn connection_manager(&self) -> Arc<ConnectionManager> {
         self.connections.clone()
@@ -278,6 +322,8 @@ impl Session {
                 .is_none_or(|new| new.value_type != old.value_type || new.options != old.options)
         });
         old_connections != new_connections
+            || serde_json::to_value(&previous.transports).ok()
+                != serde_json::to_value(&project.transports).ok()
             || old_python != new_python
             || variable_changed
             || serde_json::to_value(&previous.backends).ok()
@@ -287,7 +333,9 @@ impl Session {
     }
 
     pub async fn resource_busy(&self) -> bool {
-        self.runtime.active_run_count() > 0 || self.backend_manager().await.is_busy().await
+        self.runtime.active_run_count() > 0
+            || self.backend_manager().await.is_busy().await
+            || self.services.flow_services.transports.is_busy()
     }
 
     pub async fn requires_resource_barrier_with_resources(
@@ -376,6 +424,13 @@ impl Session {
                 next_resource_map.entry(id).or_insert(resource);
             }
         }
+        for (id, resource) in self.services.flow_services.resource_map() {
+            if !old_project.assets.iter().any(|asset| asset.id == id) {
+                next_resource_map.entry(id).or_insert(resource);
+            }
+        }
+        let transport_change = serde_json::to_value(&old_project.transports).map_err(error)?
+            != serde_json::to_value(&project.transports).map_err(error)?;
         let connection_change = serde_json::to_value(&old_project.connections).map_err(error)?
             != serde_json::to_value(&project.connections).map_err(error)?;
         let python_change = serde_json::to_value(&old_project.python).map_err(error)?
@@ -387,7 +442,12 @@ impl Session {
                 .find(|new| new.id == old.id)
                 .is_none_or(|new| new.value_type != old.value_type || new.options != old.options)
         });
-        if !connection_change && !python_change && !variable_change && !backend_change {
+        if !connection_change
+            && !python_change
+            && !variable_change
+            && !backend_change
+            && !transport_change
+        {
             self.connections
                 .reconfigure(project.connections.clone(), resources.plugins())
                 .await
@@ -443,7 +503,7 @@ impl Session {
             let next = BackendManager::new(
                 project.backends.clone(),
                 resources.backends(),
-                next_resource_map,
+                next_resource_map.clone(),
             );
             if let Err(reason) = next.start_all().await {
                 next.shutdown().await;
@@ -486,6 +546,17 @@ impl Session {
             *self.backend_bridge.lock().await = Some(spawn_backend_bridge(&self.runtime, &next));
             hydrate_backends(&self.runtime, &next).await;
         }
+        // Switch only after all fallible revision steps succeeded.
+        if transport_change {
+            self.services
+                .flow_services
+                .transports
+                .reconfigure(project.transports.clone())
+                .await;
+        }
+        self.services
+            .flow_services
+            .replace_resources(next_resource_map);
         *self.services.python.write().await = new_python;
         *self.resources.write().await = resources;
         *self.asset_root.write().await = asset_root;
@@ -543,6 +614,7 @@ impl Session {
         self.shutdown_requested.cancel();
         let _stopping = self.stopping.lock().await;
         self.runtime.stop().await;
+        self.services.flow_services.transports.shutdown().await;
         self.services.backends.read().await.clone().shutdown().await;
         self.stop_backend_bridge().await;
         self.services.host_actions.write().await.take();
@@ -1333,7 +1405,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let project:Project=serde_json::from_value(json!({"schemaVersion":1,"id":"shutdown-test","name":"Shutdown","width":400,"height":300,
             "pages":[{"id":"page","name":"Page","widgets":[]}],
-            "connections":[{"id":"serial","name":"Serial","port":"sim://temperature","baudRate":115200,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"demo-temperature"}],
+            "connections":[{"id":"serial","name":"Serial","port":"sim://temperature","baudRate":115200,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"test-protocol"}],
             "variables":[],"flows":[{"id":"flow","name":"Flow","enabled":true,"timeoutMs":5000,
                 "nodes":[{"id":"start","kind":"trigger.ui","label":"Start","position":{"x":0,"y":0},"config":{}},{"id":"wait","kind":"delay","label":"Wait","position":{"x":1,"y":0},"config":{"durationMs":4000}}],
                 "edges":[{"id":"edge","source":"start","sourcePort":"out","target":"wait","targetPort":"in"}]}]})).unwrap();

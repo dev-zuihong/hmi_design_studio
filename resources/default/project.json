@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 4,
+  "id": "untitled",
+  "name": "Untitled project",
+  "width": 1280,
+  "height": 720,
+  "pages": [
+    {
+      "id": "main",
+      "name": "Main",
+      "widgets": []
+    }
+  ],
+  "connections": [],
+  "variables": [],
+  "flows": [],
+  "assets": [],
+  "actions": [],
+  "backends": [],
+  "windows": [],
+  "codeModules": [],
+  "transports": []
+}

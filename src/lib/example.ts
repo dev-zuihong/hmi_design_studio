@@ -1,1 +1,0 @@
-export { demoProject } from './model'

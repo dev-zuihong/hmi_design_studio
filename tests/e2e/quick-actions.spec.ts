@@ -1,14 +1,14 @@
 import { test, expect, type Page } from '@playwright/test'
-import { savedProject,placeWidget } from './helpers/project'
+import { savedProject,placeWidget,prepareProtocolConnection } from './helpers/project'
 
 test('button shortcut creates and persists a single protocol action with a typed parameter', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
+  await prepareProtocolConnection(page)
   await placeWidget(page,'按钮')
   await page.locator('.inspector-tabs').getByRole('button', { name: '事件', exact: true }).click()
   await page.getByLabel('快捷动作类型', { exact: true }).selectOption('protocol.command')
-  await page.getByLabel('快捷动作连接', { exact: true }).selectOption('sensor')
-  await page.getByLabel('快捷动作命令', { exact: true }).selectOption('setTarget')
+  await page.getByLabel('快捷动作命令', { exact: true }).selectOption('write')
   await page.locator('.quick-action-editor .value-editor input').fill('37.5')
   await page.getByRole('button', { name: '创建并绑定动作', exact: true }).click()
   await expect(page.locator('.quick-action-editor')).toContainText('已创建流程并绑定到当前控件')
@@ -16,7 +16,7 @@ test('button shortcut creates and persists a single protocol action with a typed
   const button = project.pages[0].widgets.at(-1), action = button.events.click
   const flow = project.flows.find((item: any) => item.id === action.flowId)
   expect(flow.nodes.map((node: any) => node.kind)).toEqual(['trigger.ui', 'protocol.command'])
-  expect(flow.nodes[1].config).toEqual({ connectionId: 'sensor', command: 'setTarget', params: { target: { source: 'literal', value: 37.5 } } })
+  expect(flow.nodes[1].config).toEqual({ connectionId: project.connections[0].id, command: 'write', params: { target: { source: 'literal', value: 37.5 } } })
   expect(flow.edges).toHaveLength(1)
   expect(action.entryNodeId).toBe(flow.nodes[0].id)
   expect(errors).toEqual([])
@@ -42,7 +42,7 @@ test('serial panel drops at the pointer location and binds both connection butto
 test('plugin configuration editor preserves boolean, enum, object and array types', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
-  await page.locator('.resource-tabs').getByRole('button', { name: /设备连接/ }).click()
+  await prepareProtocolConnection(page)
   await page.evaluate(async () => {
     const modulePath = performance.getEntriesByType('resource').map(entry=>entry.name).find(name=>name.includes('/src/lib/resources.ts')) ?? '/src/lib/resources.ts'
     const { pluginCatalog } = await import(/* @vite-ignore */ modulePath)

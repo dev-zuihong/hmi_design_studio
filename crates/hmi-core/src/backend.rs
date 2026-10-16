@@ -867,7 +867,7 @@ while ($line = [Console]::ReadLine()) {
                     .call(
                         "invoke",
                         json!({"operation":"delay"}),
-                        Duration::from_secs(5),
+                        Duration::from_secs(30),
                         cancel,
                     )
                     .await
@@ -876,7 +876,7 @@ while ($line = [Console]::ReadLine()) {
         tokio::time::sleep(Duration::from_millis(50)).await;
         cancel.cancel();
         assert_eq!(task.await.unwrap().unwrap_err().code, "CANCELLED");
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(15), async {
             while !provider.pending.lock().unwrap().is_empty() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }

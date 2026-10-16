@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { emptyProject } from '../../src/lib/model'
-import { savedProject } from './helpers/project'
+import { savedProject, prepareProtocolConnection } from './helpers/project'
 
 const resourceTab = (page: Page, name: string) => page.locator('.resource-tabs').getByRole('button', { name: new RegExp(`^${name}`) })
 
@@ -29,6 +29,7 @@ test('resource bar starts at 32px and toggles or restores the selected tab', asy
 
 test('serial basics remain visible while advanced and typed protocol fields expand on demand', async ({ page }) => {
   await page.goto('/')
+  await prepareProtocolConnection(page)
   await page.evaluate(async () => {
     const path = performance.getEntriesByType('resource').map(entry => entry.name).find(name => name.includes('/src/lib/resources.ts')) ?? '/src/lib/resources.ts'
     const { pluginCatalog } = await import(/* @vite-ignore */ path)
@@ -37,7 +38,6 @@ test('serial basics remain visible while advanced and typed protocol fields expa
       options: { type: 'object', title: '设备选项' }, channels: { type: 'array', title: '通道列表' },
     } }
   })
-  await resourceTab(page, '设备连接').click()
   const settings = page.locator('.connection-settings')
   await expect(settings.getByRole('textbox', { name: '资源名称', exact: true })).toBeVisible()
   for (const name of ['串口', '波特率', '协议插件']) await expect(settings.getByRole('combobox', { name, exact: true })).toBeVisible()
@@ -106,8 +106,8 @@ test('error badge, programmatic reveal, read-only fields and log details survive
     document.body.append(host)
     createApp({ setup() {
       const project = emptyProject()
-      project.connections = [{ id: 'sensor', name: 'Sensor', port: 'sim://temperature', baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none', protocolId: pluginCatalog.value[0].id, protocolConfig: {} }]
-      pluginCatalog.value[0].configSchema = { type: 'object', properties: { enabled: { type: 'boolean', title: '设备启用' } } }
+      project.connections = [{ id: 'connection-test', name: 'Test connection', port: '', baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none', protocolId: 'test-protocol', protocolConfig: {} }]
+      pluginCatalog.value = [{ id: 'test-protocol', name: 'Test protocol', version: '1.0.0', configSchema: { type: 'object', properties: { enabled: { type: 'boolean', title: '设备启用' } } } }]
       const editor = useEditor(project), runtime = useRuntime(), expanded = ref(false), tab = ref('connections'), panel = ref()
       runtime.events.value = [{ kind: 'node.completed', runId: 'run-one', nodeId: 'node-one', timestamp: 1700000000000, data: { temperature: 23.6 } }, { kind: 'node.failed', runId: 'run-two', nodeId: 'node-two', timestamp: 1700000000001, data: { error: 'Timeout' } }]
       ;(window as any).__resourceTest = { showIssues: () => panel.value.showIssues(), showConnections: () => panel.value.showConnections(), readOnly: () => editor.readOnly.value = true }

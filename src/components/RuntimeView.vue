@@ -6,8 +6,9 @@ import type { Runtime } from '../lib/backend'
 import { call } from '../lib/backend'
 import { open } from '@tauri-apps/plugin-dialog'
 import { provideRuntimeFileService } from '../lib/runtime-files'
-const props = defineProps<{ project: Project; runtime: Runtime }>()
-const emit = defineEmits<{ error: [message: string] }>()
+import { projectLocale } from '../lib/i18n'
+const props = defineProps<{ project: Project; runtime: Runtime; error?: string }>()
+const emit = defineEmits<{ error: [message: string]; retry: [] }>()
 watch(()=>props.runtime.lastError?.value,error=>{if(error)emit('error',error)})
 provideRuntimeFileService({async choose(options){
   let path=options.path
@@ -18,7 +19,8 @@ const host = ref<HTMLElement>()
 const hostSize = ref({ width: 0, height: 0 })
 const page = computed(() => props.project.pages.find(page => page.id === props.runtime.currentPage.value) ?? props.project.pages[0]!)
 const responsiveLayout = computed(() => page.value.responsive !== false && (page.value.layout?.type ?? 'absolute') !== 'absolute')
-const availableSize = computed(() => ({ width: Math.max(1, hostSize.value.width - 32), height: Math.max(1, hostSize.value.height - 32) }))
+const projectChrome = computed(()=>props.project.presentation?.chrome==='project')
+const availableSize = computed(() => ({ width: Math.max(1, hostSize.value.width - (projectChrome.value?0:32)), height: Math.max(1, hostSize.value.height - (projectChrome.value?0:32)) }))
 const designSize = computed(()=>props.runtime.windowSize?.value??{width:props.project.width,height:props.project.height})
 const scale = computed(() => responsiveLayout.value ? 1 : Math.max(0.1, Math.min(availableSize.value.width / designSize.value.width, availableSize.value.height / designSize.value.height)))
 const pageWidth = computed(() => responsiveLayout.value ? availableSize.value.width : designSize.value.width)
@@ -28,7 +30,8 @@ const frameHeight = computed(() => pageHeight.value * scale.value)
 const renderSnapshot = computed(() => {
   const snapshot = props.runtime.snapshot.value
   const context=props.runtime.context?.value??{}, windowId=context.windowInstanceId
-  return { ...snapshot, context, ui:{...(snapshot.ui??{}),...(windowId?snapshot.windowUi?.[windowId]??{}:{})}, inputs: { ...(windowId?{}:snapshot.inputs ?? {}), ...props.runtime.inputs.value } }
+  const error = props.error || props.runtime.lastError?.value || ''
+  return { ...snapshot, context, runtime:{state:props.runtime.busy.value?'starting':props.runtime.running.value?'running':error?'error':'stopped',error,locale:projectLocale.value}, ui:{...(snapshot.ui??{}),...(windowId?snapshot.windowUi?.[windowId]??{}:{})}, inputs: { ...(windowId?{}:snapshot.inputs ?? {}), ...props.runtime.inputs.value } }
 })
 let resize: ResizeObserver | undefined, resizeFrame = 0
 onMounted(() => {
@@ -50,5 +53,6 @@ onBeforeUnmount(() => { resize?.disconnect(); cancelAnimationFrame(resizeFrame) 
 </script>
 
 <template>
-  <div ref="host" class="runtime-host" :inert="!runtime.running.value || runtime.busy.value"><div class="runtime-frame" :data-responsive-layout="responsiveLayout" :data-runtime-scale="scale" :style="{width: `${frameWidth}px`, height: `${frameHeight}px`}"><div class="runtime-page" :style="{width: `${pageWidth}px`, height: `${pageHeight}px`, transform: `scale(${scale})`}"><WidgetTree :project="project" :page-id="page.id" :snapshot="renderSnapshot" :events="runtime.events.value" @input="(id, value) => runtime.updateInput(id, value).catch(error => emit('error', String(error)))" @action="(action, value) => runtime.act(action, value).catch(error => emit('error', String(error)))" /></div></div></div>
+  <div ref="host" class="runtime-host" :class="{'project-runtime':projectChrome}"><div class="runtime-frame" :data-responsive-layout="responsiveLayout" :data-runtime-scale="scale" :style="{width: `${frameWidth}px`, height: `${frameHeight}px`}"><div class="runtime-page" :style="{width: `${pageWidth}px`, height: `${pageHeight}px`, transform: `scale(${scale})`}"><WidgetTree :project="project" :page-id="page.id" :snapshot="renderSnapshot" :events="runtime.events.value" @input="(id, value) => {if(runtime.running.value&&!runtime.busy.value)runtime.updateInput(id, value).catch(error => emit('error', String(error)))}" @action="(action, value) => {if(runtime.busy.value)return;if(action.kind==='runtimeRetry')emit('retry');else if(runtime.running.value)runtime.act(action, value).catch(error => emit('error', String(error)))}" /></div></div></div>
 </template>
+<style scoped>.project-runtime{background:#fff}.project-runtime>.runtime-frame{box-shadow:none}</style>

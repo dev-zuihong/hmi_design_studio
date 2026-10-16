@@ -45,18 +45,51 @@ fs.mkdirSync(path.join(resources, 'templates', 'windows-x64'), { recursive: true
 fs.copyFileSync(runnerSource, path.join(resources, 'templates', 'windows-x64', 'HmiRunner.exe'))
 fs.cpSync(path.join(sourceResources, 'webview2'), path.join(resources, 'webview2'), { recursive: true })
 
-const fixture = JSON.parse(fs.readFileSync(path.join(repository, 'resources', 'example', 'project.json'), 'utf8'))
-fixture.schemaVersion = 3
+const fixture = JSON.parse(fs.readFileSync(path.join(repository, 'resources', 'default', 'project.json'), 'utf8'))
+fixture.schemaVersion = 4
 fixture.id = `native-preview-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
 fixture.name = 'Native preview lifecycle fixture'
 fixture.pages = [fixture.pages[0]]
 fixture.pages[0].layout = { type: 'absolute' }
 fixture.pages[0].responsive = false
 fixture.i18n = { defaultLocale: 'zh-CN', locales: ['zh-CN'], messages: { 'zh-CN': {} } }
-fixture.pages[0].widgets = [fixture.pages[0].widgets.find(widget => widget.kind === 'text')]
-fixture.pages[0].widgets[0].props.text = 'Independent preview is running'
-fixture.pages[0].widgets[0].bindings = {}
-fixture.pages[0].widgets[0].events = {}
+fixture.pages[0].widgets = [{
+  id: 'native-preview-control', kind: 'text', name: 'Native preview control',
+  x: 40, y: 32, width: 380, height: 48, zIndex: 1,
+  props: { text: 'Independent preview is running', enabled: true, visible: true, fontSize: 26 },
+  bindings: {}, events: {},
+}]
+const previewWidget = fixture.pages[0].widgets[0]
+previewWidget.id = 'native-preview-control'
+previewWidget.props.text = 'Independent preview is running'
+previewWidget.bindings = {}
+previewWidget.events = {}
+previewWidget.styleTokens = { color: 'accent' }
+previewWidget.componentInstance = {
+  componentId: 'native-preview-component', instanceId: 'native-preview-instance',
+  rootWidgetId: previewWidget.id, widgetIdMap: { 'native-preview-component-root': previewWidget.id },
+  variant: {}, overrides: {},
+}
+const componentWidget = { ...structuredClone(previewWidget), id: 'native-preview-component-root' }
+delete componentWidget.componentInstance
+fixture.designSystem = {
+  version: 1,
+  tokenSets: {
+    native: { id: 'native', name: 'Native', tokens: { accent: { $type: 'color', $value: '#123456' } } },
+    contrast: { id: 'contrast', name: 'Contrast', tokens: { accent: { $type: 'color', $value: '#345678' } } },
+  },
+  themes: {
+    nativeTheme: { id: 'nativeTheme', name: 'Native', tokenSets: ['native'] },
+    contrastTheme: { id: 'contrastTheme', name: 'Contrast', tokenSets: ['contrast'] },
+  },
+  components: {
+    'native-preview-component': {
+      id: 'native-preview-component', name: 'Native preview control', rootWidgetId: 'native-preview-component-root',
+      widgets: [componentWidget],
+    },
+  },
+  libraries: {}, activeThemeId: 'nativeTheme',
+}
 for (const key of ['connections', 'backends', 'variables', 'flows', 'actions', 'windows', 'assets']) fixture[key] = []
 delete fixture.python
 const projectFile = path.join(output, 'project.json')
@@ -81,7 +114,7 @@ const child = spawn(executable, ['--project', projectFile], { cwd: output, windo
   } })
 fs.closeSync(stdout); fs.closeSync(stderr)
 report.pid = child.pid
-let browser, context, main, logic, studioProcess, studioWindowHandle, failure, spawnError
+let browser, context, main, logic, runnerPage, studioProcess, studioWindowHandle, failure, spawnError
 child.on('error', error => { spawnError = error })
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 async function poll(name, read, predicate, timeout = 30000) {
@@ -192,6 +225,12 @@ async function startPreview() {
   await expect(main.locator('.toast.error')).toHaveCount(0)
   return { state: value, process: runner }
 }
+async function assertRunnerTokenColor(expected) {
+  assert(runnerPage && !runnerPage.isClosed(), 'Runner WebView2 target is not attached through the native debugging endpoint')
+  const control = runnerPage.locator('.runtime-widget[data-widget-id="native-preview-control"] .widget-content')
+  await expect(control).toBeVisible()
+  await expect.poll(() => control.evaluate(element => getComputedStyle(element).color)).toBe(expected)
+}
 async function step(name, run) {
   process.stdout.write(`${name}\n`)
   const started = Date.now()
@@ -219,7 +258,20 @@ try {
     assert.equal(Number(fs.readFileSync(workspaceLock, 'utf8').trim()), child.pid, 'Isolated workspace lock belongs to another process')
     const workspace = await invoke('workspace_state')
     assert.equal(workspace.project.id, fixture.id)
+    const initialProject = await invoke('get_initial_project')
+    assert.equal(initialProject.schemaVersion, 4)
+    assert.deepEqual(initialProject.designSystem, fixture.designSystem)
+    assert.equal(initialProject.pages[0].widgets[0].id, 'native-preview-control')
+    assert.deepEqual(initialProject.pages[0].widgets[0].componentInstance.widgetIdMap, { 'native-preview-component-root': 'native-preview-control' })
+    assert.equal(workspace.project.schemaVersion, 4)
+    assert.deepEqual(workspace.project.designSystem, fixture.designSystem)
     assert.equal(workspace.dirty, false, 'Fixture must begin clean')
+    const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5WQAAAAASUVORK5CYII=', 'base64')
+    const asset = await invoke('import_asset_bytes', { name: 'library.png', bytesBase64: imageBytes.toString('base64') })
+    assert.equal(asset.sha256, crypto.createHash('sha256').update(imageBytes).digest('hex'))
+    assert.deepEqual(fs.readFileSync(path.join(workspaceRoot, asset.path)), imageBytes)
+    assert.equal((await invoke('workspace_state')).dirty, false, 'Importing bytes alone must not change the project')
+    report.embeddedLibraryAsset = { size: asset.size, sha256: asset.sha256, persisted: true }
     await captureDescendants()
     studioWindowHandle = await poll('Studio native window', () => powershell(`(Get-Process -Id ${child.pid}).MainWindowHandle.ToInt64()`), handle => handle !== '0' && handle !== '')
     const initial = await idle()
@@ -230,19 +282,31 @@ try {
   const first = await step('first UI preview launch creates a running Runner', async () => {
     const opened = await startPreview()
     await main.screenshot({ path: path.join(output, 'studio-preview-running.png') })
-    // WebView2 may share the inherited debugging endpoint, or only expose the
-    // Studio browser process. Native window + Rust RPC are mandatory in either
-    // case; record renderer inspection separately instead of assuming one CDP.
-    const previewPage = await poll('optional Runner CDP target', async () => {
+    runnerPage = await poll('Runner WebView2 target', async () => {
       const pages = context.pages().filter(page => page !== main && !page.isClosed())
       for (const page of pages) if (await page.locator('.preview-screen').count()) return page
       return null
-    }, Boolean, 2500).catch(() => null)
-    if (previewPage) {
-      await expect(previewPage.locator('.runtime-widget').filter({ hasText: 'Independent preview is running' })).toBeVisible()
-      await previewPage.screenshot({ path: path.join(output, 'preview-running.png') })
-    }
-    return { ...opened, rendererInspected: !!previewPage }
+    }, Boolean, 15000)
+    await expect(runnerPage.locator('.runtime-widget').filter({ hasText: 'Independent preview is running' })).toBeVisible()
+    await assertRunnerTokenColor('rgb(18, 52, 86)')
+    await runnerPage.screenshot({ path: path.join(output, 'preview-running.png') })
+    return { ...opened, rendererInspected: true, initialTokenColor: 'rgb(18, 52, 86)' }
+  })
+  await step('schema 4 theme and component override hot update stays in the same Runner', async () => {
+    const current = await invoke('get_initial_project')
+    current.designSystem.activeThemeId = 'contrastTheme'
+    current.pages[0].widgets[0].props.text = 'Native preview token hot update'
+    current.pages[0].widgets[0].componentInstance.overrides = { 'native-preview-component-root': { text: 'Native preview token hot update' } }
+    const updated = await invoke('replace_workspace', { project: current, path: null })
+    assert.equal(updated.project.schemaVersion, 4)
+    assert.equal(updated.project.pages[0].widgets[0].id, 'native-preview-control')
+    const applied = await poll('schema 4 preview hot update', state,
+      value => value.running && value.pid === first.state.pid && value.updateStatus === 'applied' && value.revision > first.state.revision, 30000)
+    await expect(runnerPage.locator('.runtime-widget').filter({ hasText: 'Native preview token hot update' })).toBeVisible()
+    await assertRunnerTokenColor('rgb(52, 86, 120)')
+    assert.equal(applied.pid, first.state.pid, 'A schema 4 update must not restart the Runner')
+    assert.equal((await invoke('get_initial_project')).designSystem.activeThemeId, 'contrastTheme')
+    return { pid: applied.pid, revision: applied.revision, activeThemeId: 'contrastTheme', tokenColor: 'rgb(52, 86, 120)' }
   })
   await step('show preview reuses the same PID and generation', async () => {
     await main.getByRole('button', { name: '显示预览', exact: true }).click()

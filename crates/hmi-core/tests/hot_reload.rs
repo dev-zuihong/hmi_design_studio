@@ -48,7 +48,7 @@ fn project(flows: Vec<Value>, widgets: Vec<Value>) -> Project {
     serde_json::from_value(json!({
         "schemaVersion":2,"id":"reload-project","name":"Hot reload tests","width":800,"height":600,
         "pages":[{"id":"page","name":"Page","responsive":true,"layout":{"type":"absolute"},"guides":[],"widgets":widgets}],
-        "connections":[{"id":"device","name":"Device","port":"sim://temperature","baudRate":115200,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"demo-temperature","protocolConfig":{}}],
+        "connections":[{"id":"device","name":"Device","port":"sim://temperature","baudRate":115200,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"test-protocol","protocolConfig":{}}],
         "variables":[{"id":"value","name":"Value","type":"number","initial":0}],
         "flows":flows,"assets":[],"actions":[],
         "i18n":{"defaultLocale":"zh-CN","locales":["zh-CN","en-US"],"messages":{"zh-CN":{},"en-US":{}}}

@@ -1,5 +1,6 @@
 import { computed, ref, type Ref } from 'vue'
 import { clone, createWidget, emptyProject, newId, type Project, type Widget, type FlowEdge, type Flow } from './model'
+import { captureComponentInstanceOverrides, remapClonedWidget, syncComponentInstances, validateDesignSystem } from './design-system'
 
 export function checkConnection(flow: Flow, edge: Omit<FlowEdge, 'id'>): string | undefined {
   if (edge.source === edge.target) return '不能将节点连接到自身'
@@ -16,7 +17,7 @@ export function checkConnection(flow: Flow, edge: Omit<FlowEdge, 'id'>): string 
 
 export function parseProject(text: string): Project {
   const value = JSON.parse(text)
-  if (!value || ![1, 2, 3].includes(value.schemaVersion)) throw new Error('不支持的项目格式版本；当前支持版本 1、2 和 3')
+  if (!value || ![1, 2, 3, 4].includes(value.schemaVersion)) throw new Error('不支持的项目格式版本；当前支持版本 1、2、3 和 4')
   if (typeof value.id !== 'string' || typeof value.name !== 'string' || !Number.isFinite(value.width) || !Number.isFinite(value.height) || value.width < 100 || value.height < 100) throw new Error('项目名称或画布尺寸无效')
   for (const key of ['pages', 'connections', 'variables', 'flows']) if (!Array.isArray(value[key])) throw new Error(`项目缺少 ${key}`)
   if (!value.pages.length || value.pages.some((page: any) => !page.id || !Array.isArray(page.widgets))) throw new Error('项目至少需要一个有效页面')
@@ -27,6 +28,7 @@ export function parseProject(text: string): Project {
   const legacy = value.schemaVersion === 1
   value.schemaVersion = Math.max(2, value.schemaVersion)
   for (const page of value.pages) { page.layout ??= { type: 'absolute' }; page.responsive ??= !legacy; page.guides ??= [] }
+  if (value.designSystem) { value.schemaVersion = 4; validateDesignSystem(value as Project) }
   value.i18n ??= { defaultLocale: 'zh-CN', locales: ['zh-CN', 'en-US'], messages: { 'zh-CN': {}, 'en-US': {} } }
   value.actions ??= []
   return value as Project
@@ -45,7 +47,26 @@ export function useEditor(initial = emptyProject(), readOnlyState?: Ref<boolean>
   const dirty = computed(() => remoteDirty.value ?? JSON.stringify(project.value) !== saved.value)
   const canUndo = computed(() => remoteUndo ? remoteCanUndo.value : past.value.length > 0), canRedo = computed(() => remoteRedo ? remoteCanRedo.value : future.value.length > 0)
   function checkpoint() { if (readOnly.value) return false; const state = JSON.stringify(project.value); if (past.value.at(-1) !== state) { past.value.push(state); if (past.value.length > 100) past.value.shift() }; future.value = []; return true }
-  function mutate(change: (p: Project) => void) { if (readOnly.value) return false; checkpoint(); change(project.value); return true }
+  function mutate(change: (p: Project) => void) {
+    if (readOnly.value) return false
+    const before = JSON.stringify(project.value)
+    try {
+      change(project.value)
+      if (project.value.designSystem) project.value.schemaVersion = 4
+      captureComponentInstanceOverrides(JSON.parse(before) as Project, project.value)
+      syncComponentInstances(project.value)
+      validateDesignSystem(project.value)
+    } catch (error) {
+      project.value = JSON.parse(before) as Project
+      ensureSelection()
+      throw error
+    }
+    if (JSON.stringify(project.value) !== before) {
+      if (past.value.at(-1) !== before) { past.value.push(before); if (past.value.length > 100) past.value.shift() }
+      future.value = []
+    }
+    return true
+  }
   function ensureSelection() { selected.value = selected.value.filter(id => page.value.widgets.some(w => w.id === id)); if (!project.value.pages.some(p => p.id === pageId.value)) pageId.value = project.value.pages[0]!.id; if (!project.value.flows.some(flow => flow.id === flowId.value)) flowId.value = project.value.flows[0]?.id ?? '' }
   function undo() { if (readOnly.value) return false; if (remoteUndo) { void remoteUndo(); return true }; const state = past.value.pop(); if (!state) return false; future.value.push(JSON.stringify(project.value)); project.value = JSON.parse(state); ensureSelection(); return true }
   function redo() { if (readOnly.value) return false; if (remoteRedo) { void remoteRedo(); return true }; const state = future.value.pop(); if (!state) return false; past.value.push(JSON.stringify(project.value)); project.value = JSON.parse(state); ensureSelection(); return true }
@@ -54,7 +75,7 @@ export function useEditor(initial = emptyProject(), readOnlyState?: Ref<boolean>
   function updateWidget(id: string, patch: Partial<Widget>) { mutate(() => { const widget = page.value.widgets.find(w => w.id === id); if (widget) Object.assign(widget, patch) }) }
   function descendants(ids = selected.value): Widget[] { const included = new Set(ids); let changed = true; while (changed) { changed = false; for (const widget of page.value.widgets) if (widget.parentId && included.has(widget.parentId) && !included.has(widget.id)) { included.add(widget.id); changed = true } }; return page.value.widgets.filter(widget => included.has(widget.id)) }
   function removeSelected() { if (readOnly.value || !selected.value.length || selectedWidgets.value.some(widget => widget.editor?.locked)) return; const ids = new Set(descendants().map(widget => widget.id)); if (mutate(() => { page.value.widgets = page.value.widgets.filter(w => !ids.has(w.id)) })) selected.value = [] }
-  function cloneWidgets(widgets: Widget[], offset = { x: 24, y: 24 }, parentId?: string) { const ids = new Map(widgets.map(widget => [widget.id, newId('widget')])); return widgets.map(widget => { const copy = clone(widget); copy.id = ids.get(widget.id)!; copy.name += ' 副本'; if (copy.parentId && ids.has(copy.parentId)) copy.parentId = ids.get(copy.parentId); else { copy.x += offset.x; copy.y += offset.y; if (parentId !== undefined) copy.parentId = parentId || undefined }; return copy }) }
+  function cloneWidgets(widgets: Widget[], offset = { x: 24, y: 24 }, parentId?: string) { const ids = Object.fromEntries(widgets.map(widget => [widget.id, newId('widget')])); return widgets.map(widget => { const copy = clone(widget); remapClonedWidget(copy, ids); copy.name += ' 副本'; if (!widget.parentId || !ids[widget.parentId]) { copy.x += offset.x; copy.y += offset.y; if (parentId !== undefined) copy.parentId = parentId || undefined }; return copy }) }
   function duplicateSelected() { if (readOnly.value || !selected.value.length) return; const copies = cloneWidgets(descendants()); if (mutate(() => page.value.widgets.push(...copies))) selected.value = copies.filter(widget => !widget.parentId || !copies.some(parent => parent.id === widget.parentId)).map(widget => widget.id) }
   function align(direction: 'left' | 'top' | 'right' | 'bottom' | 'center' | 'middle' | 'horizontal' | 'vertical' | 'width' | 'height') {
     const widgets = selectedWidgets.value.filter(widget => !widget.editor?.locked)

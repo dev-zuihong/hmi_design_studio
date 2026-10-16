@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod connection;
+pub mod design_system;
 pub mod error;
 pub mod framing;
 pub mod model;

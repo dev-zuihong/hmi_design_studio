@@ -3,6 +3,6 @@ import vue from '@vitejs/plugin-vue';
 import { resolve } from 'node:path';
 
 export default defineConfig({
-  plugins: [vue({ template: { compilerOptions: { isCustomElement: (tag) => tag.startsWith('fluent-') } } })],
+  plugins: [vue()],
   build: { target: 'es2022', outDir: 'dist-runner', rollupOptions: { input: resolve(import.meta.dirname, 'runner.html') } },
 });

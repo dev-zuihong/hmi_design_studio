@@ -15,6 +15,30 @@ fn executor() -> PythonExecutor {
     )
 }
 
+#[tokio::test]
+async fn project_modules_support_imports_revisions_and_compile_only_validation() {
+    let runner = executor();
+    runner.validate_modules(json!([{"id":"library","name":"project_library","source":"raise RuntimeError('validation must not execute')"}])).await.unwrap();
+    for value in [7, 9] {
+        let modules = json!([
+            {"id":"values","name":"project_values","source":format!("VALUE={value}")},
+            {"id":"library","name":"project_library","source":"from project_values import VALUE\ncount=0\ndef read():\n global count\n count+=1\n return VALUE,count"}
+        ]);
+        let result=runner.execute_with_modules("from project_library import read\ndef transform(msg):\n msg['result']=list(read())\n return msg",json!({}),modules,PythonLimits::default(),CancellationToken::new()).await.unwrap();
+        assert_eq!(result.message.unwrap()["result"], json!([value, 1]));
+    }
+    for (name, source) in [
+        ("json", "VALUE=1"),
+        ("bad-name", "VALUE=1"),
+        ("application", "def broken(:"),
+    ] {
+        assert!(runner
+            .validate_modules(json!([{"id":"invalid","name":name,"source":source}]))
+            .await
+            .is_err());
+    }
+}
+
 async fn execute(source: &str) -> Result<hmi_python::PythonResult, PythonError> {
     executor()
         .execute(

@@ -3,7 +3,7 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { call, desktop } from './backend'
 import { browserProjectPackage } from './project-package'
 import type { PluginManifest, Project } from './model'
-export const pluginCatalog = ref<PluginManifest[]>([{ id: 'demo-temperature', name: '示例温度协议', version: '1.0.0', commands: [{ name: 'read', label: '读取温度', params: { type: 'object', properties: {} } }, { name: 'setTarget', label: '设置目标温度', params: { type: 'object', properties: { target: { type: 'number', title: '目标温度' } }, required: ['target'] } }], points: [{ key: 'temperature', label: '温度', type: 'number' }, { key: 'rawTemperature', label: '原始温度', type: 'number' }, { key: 'target', label: '目标温度', type: 'number' }] }])
+export const pluginCatalog = ref<PluginManifest[]>([])
 export const assetUrls = ref<Record<string, string>>({})
 export const assetFonts = ref<Record<string, string>>({})
 const loadedFonts = new Map<string, FontFace>()

@@ -1,5 +1,4 @@
 import { createApp, h, reactive } from 'vue'
-import '../../src/lib/fluent'
 import '../../src/style.css'
 import WidgetTree from '../../src/components/WidgetTree.vue'
 import JsonValueEditor from '../../src/components/JsonValueEditor.vue'

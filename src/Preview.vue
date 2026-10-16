@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AlertCircle, RefreshCw, SquareStop } from 'lucide-vue-next'
 import PreviewScreen from './components/PreviewScreen.vue'
-import FButton from './components/fluent/FButton.vue'
+import BaseButton from './components/base/BaseButton.vue'
 import { desktop, useRuntime } from './lib/backend'
 import { refreshAssets } from './lib/resources'
 import { projectLocale,setDesignerLocale,t } from './lib/i18n'
@@ -20,6 +20,7 @@ async function load() {
   } catch (reason) { error.value = String(reason).replace(/^Error:\s*/, '') }
   finally { loading.value = false }
 }
+async function retryRuntime() { const project=runtime.previewProject.value; if(!project)return; pending.value=true; error.value=''; try { await runtime.start(project) } catch(reason) { error.value=String(reason).replace(/^Error:\s*/, '') } finally { pending.value=false } }
 async function stop() {
   if (pending.value) return
   pending.value = true; error.value = ''
@@ -34,9 +35,9 @@ onBeforeUnmount(runtime.dispose)
 
 <template>
   <div class="preview-window-shell">
-    <div v-if="error" class="runner-error" role="alert"><AlertCircle :size="18" /><span>{{ error }}</span><FButton :disabled="loading || pending" @click="load"><RefreshCw :size="15" />重新加载</FButton></div>
-    <PreviewScreen v-if="runtime.previewProject.value" :project="runtime.previewProject.value" :runtime="runtime" :pending="pending || loading" @close="stop" @error="error = $event" />
-    <div v-else class="preview-loading"><p>{{ loading ? '正在连接预览会话…' : '无法载入预览' }}</p><FButton :disabled="pending || !desktop" @click="stop"><SquareStop :size="15" />关闭预览</FButton></div>
+    <div v-if="error && runtime.previewProject.value?.presentation?.chrome !== 'project'" class="runner-error" role="alert"><AlertCircle :size="18" /><span>{{ error }}</span><BaseButton :disabled="loading || pending" @click="load"><RefreshCw :size="15" />重新加载</BaseButton></div>
+    <PreviewScreen v-if="runtime.previewProject.value" :project="runtime.previewProject.value" :runtime="runtime" :pending="pending || loading" :error="error" @close="stop" @error="error = $event" @retry="retryRuntime" />
+    <div v-else class="preview-loading"><p>{{ loading ? '正在连接预览会话…' : '无法载入预览' }}</p><BaseButton :disabled="pending || !desktop" @click="stop"><SquareStop :size="15" />关闭预览</BaseButton></div>
   </div>
 </template>
 

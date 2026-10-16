@@ -1,12 +1,12 @@
-# 当前实现接口（0.3.0）
+# 当前实现接口（0.4.0）
 
-本文件固定当前模块间契约，补充 [PLAN.md](PLAN.md)。CHG-0004 为首版基线，CHG-0008～0012 扩展工程、编辑和预览；字段采用 camelCase，PTB 工程 `schemaVersion` 为 3，兼容读取 v1/v2，既有工程保留 v2。Rust 模型在 `hmi-core`，前端模型在 `src/lib/model.ts`，两者须用同一示例项目交叉验证。自动布局页面在 responsive 开启时按运行窗口可用尺寸重排、比例为 1；关闭 responsive 或使用绝对布局时按项目设计尺寸等比适配。
+本文件固定当前模块间契约，补充 [PLAN.md](PLAN.md)。CHG-0004 为首版基线，CHG-0008～0012 扩展工程、编辑和预览；字段采用 camelCase，使用新增能力的工程 `schemaVersion` 为 4，兼容读取 v1/v2/v3，旧工程不使用新能力时保留原版本。Rust 模型在 `hmi-core`，前端模型在 `src/lib/model.ts`，两者须用最小合成测试数据交叉验证。自动布局页面在 responsive 开启时按运行窗口可用尺寸重排、比例为 1；关闭 responsive 或使用绝对布局时按项目设计尺寸等比适配。
 
 ## 项目 JSON
 
 ```typescript
 interface Project {
-  schemaVersion: 1 | 2 | 3; id: string; name: string;
+  schemaVersion: 1 | 2 | 3 | 4; id: string; name: string;
   width: number; height: number;
   pages: Page[]; connections: ConnectionConfig[];
   variables: Variable[]; flows: Flow[];
@@ -75,14 +75,14 @@ interface ValidationIssue { severity: 'error' | 'warning'; path: string; message
 
 ## Rust 模块边界
 
-- `hmi-core`：项目模型与校验、Runtime、HostServices trait、ConnectionManager、插件清单及进程协议；`demo-protocol` 提供示例插件。
+- `hmi-core`：项目模型与校验、Runtime、HostServices trait、ConnectionManager、插件清单及进程协议；协议插件由用户导入。
 - `hmi-python`：`PythonEnvironment::load(root)`、`PythonExecutor::new(environment)`、`execute(source, msg, limits, cancel)`、`validate_source(source)`；导出环境使用与缓存相同布局。
 - `hmi-desktop`：组合连接管理器及 Python 执行器、项目文件、资源缓存、导出和 Tauri 命令。`apps/studio` / `apps/runner` 分别构建设计器与独立运行程序。
 - `HostServices`：异步 open_connection、close_connection、command、python；设备命令接收 CancellationToken，由连接 actor 保持在途事务完整性。
 - `Runtime`：new(project, Arc<dyn HostServices>)、subscribe、start/stop、start_flow/stop_flow、trigger(flowId, entryNodeId, msg, inputs)、update_point；方法的具体 Rust 参数由核心模块暴露并在整合时统一。
-- `ConnectionManager::new(connections, plugins_root)`，open/close/command/subscribe，以及 `reconfigure` 原位替换变动资源并保留未变连接 actor。插件包目录 `<plugins_root>/<protocolId>/manifest.json`，可执行路径相对该包目录。`sim://temperature` 是示例连接的明确模拟模式，真实串口使用 tokio-serial。
+- `ConnectionManager::new(connections, plugins_root)`，open/close/command/subscribe，以及 `reconfigure` 原位替换变动资源并保留未变连接 actor。插件包目录 `<plugins_root>/<protocolId>/manifest.json`，可执行路径相对该包目录。真实串口使用 tokio-serial；旧 `sim://temperature` 仅保留导入兼容与内部测试，不作为内置设备入口。
 
-协议配置及命令参数采用明确受限的 JSON Schema 子集，详见 [插件接口](../crates/demo-protocol/README.md)。导入时拒绝不支持的约束关键字，打开连接和发送命令前再次验证实际值；动态引用值不能仅凭设计时校验放行。
+协议配置及命令参数采用明确受限的 JSON Schema 子集，详见 [插件接口](PROTOCOL-PLUGINS.md)。导入时拒绝不支持的约束关键字，打开连接和发送命令前再次验证实际值；动态引用值不能仅凭设计时校验放行。
 
 ## 工程包与共享工程状态
 
@@ -113,7 +113,7 @@ IPC 已断开时不再发送无法响应的关闭 RPC，直接等待子进程自
 | 命令 | 参数 / 返回 |
 | --- | --- |
 | `get_environment` | 返回 `{mode: 'studio'|'runner'|'preview', version, platform, target, pythonRuntimeId, pythonAvailable, runnerAvailable, webviewAvailable, projectPath?: string}`；`platform` 为 `windows-x64` / `macos-arm64` / `macos-x64`，前端据此显示平台及选择新 Python 节点的运行资源 |
-| `get_initial_project` | 返回 Project；Runner 加载 `--project` 指定项目，设计器加载内置示例 |
+| `get_initial_project` | 返回 Project；Runner 加载 `--project` 指定项目，设计器首次使用空白工程或恢复已保存工作区 |
 | `open_project` | `{path}` → Project |
 | `save_project` | 旧JSON兼容入口；GUI保存统一走完整工程包命令 |
 | `workspace_state` | `{windowId?}` → `{workspaceId,project,revision,savedRevision,dirty,path,histories,recovered}` |
@@ -156,14 +156,32 @@ Runner 模板为 `.cache/templates/<platform>`：Windows 包含 `HmiRunner.exe`�
 macOS Studio 初次启动从 app 的 `Contents/Resources` 为当前用户初始化 `HmiStudio/resources/<applicationVersion>/<platform>` 可写缓存（在系统 Application Support 目录），之后导入不修改已签名的 app。同版本构建的 Runner 模板按可执行文件 SHA-256 比较并原子刷新，失败恢复原模板；已有用户插件/Python 缓存不被模板刷新覆盖。开发时可用 `HMI_RESOURCE_ROOT` 指定资源目录；打包 Runner 优先使用 app 内资源，不被该开发变量覆盖。macOS ZIP 保留 Unix 权限，重新 ad-hoc 签名后再计算发布文件 SHA-256；组内 Python 子进程使用独立进程组清理与采样 RSS 限制，具体边界见 [PLAN.md](PLAN.md)。
 
 
-## PTB 扩展接口（CHG-0015）
+## 后端资源与窗口接口（CHG-0015）
 
 schema 3 的 `backends` 元素为 `{id,name,providerId,providerVersion,mode,config}`；`windows` 元素为 `{id,pageId,title,width,height,minWidth?,minHeight?,instanceKey?}`。`ValueRef` 增加 `{source:'backend',key,path}`、`{source:'context',path}`。快照增加 `backends` 与按窗口实例组织的 `windowUi`；控件事件消息的 `context` 携带 `windowInstanceId/deviceKey/backendId/generation`。相同流程按窗口实例单飞，停止流程仍能停止全部实例。
 
 `HostServices.backend_invoke` 由 `BackendManager` 执行；`HostServices.host_action` 经有界请求队列交给桌面宿主，返回实际窗口或文件操作结果。支持 `backend.invoke/trigger.backend/window.open/window.focus/window.close/file.open/file.save`。文件引用是宿主注册的不可变快照；`.ptbcfg` 选择时解析本地伴随文件引用，保存时校验并复制附件。`hmi-cli package` 使用与设计器相同的工程包写入器；CLI smoke 仅允许显式模拟连接和模拟后端。
 
-后端资源目录为 `backends/<target>/<providerId>`（工程/缓存）或 `backends/<providerId>`（独立运行）。工程导入、保存、预览资源快照和独立运行导出均包含这些目录。具体清单、协议、组件属性及 PTB 操作参见 [ING-PTB.md](ING-PTB.md) 和后端清单。
+后端资源目录为 `backends/<target>/<providerId>`（工程/缓存）或 `backends/<providerId>`（独立运行）。工程导入、保存、预览资源快照和独立运行导出均包含这些目录。业务清单由用户提供；本仓库不再附带业务提供程序或演示工程。
 
 新增桌面命令 `import_backend({path})` 导入后端目录；`runtime_import_file({path})` 返回运行文件快照及配置附件引用；`get_runtime_window_state()` 按调用窗口返回实例、工程和快照，`update_runtime_window_input({id,value})` 仅更新该实例输入。设备拔出、后端失败或代次变化关闭对应窗口，模板或后端删除在工程应用后清理；关闭 Runner 主窗先收尾会话并关闭所有子窗。
 
 资源屏障同时等待流程和已受理后端任务；资源身份包含配置与文件摘要，等内容复制不重启后端。同路径内容变化可被新候选识别。重建保留运行文件快照；失败恢复旧后端和连接，释放触发屏障。窗口 UI 热更仍使用实例上下文与独立输入，不套用主窗状态。
+
+## schema 4：设计系统与流程业务（CHG-0017）
+
+设计系统模型、样式优先级、主组件及稳定实例 ID、库快照和布局字段见 [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md)。`designSystem`、控件 `styleTokens/componentInstance` 通过 Rust 模型完整往返。界面基础组件使用 Vue/原生 HTML。
+
+工程增加 `codeModules:[{id,name,source}]`、`transports:[{id,name,kind,interfaceGuid,vendorId,productId,packetSize}]`、`presentation:{chrome:'project'|'host'}`。模块名是 Python import 名称，每个节点调用的独立解释器从工程源码内存加载模块；编译预检不执行模块顶层代码。单模块源码上限 1 MiB，全部上限 2 MiB。Python 仅按工程节点需要打包。
+
+Python 节点可配置 `args:{name:ValueRef}` 及 `stateVariable`。宿主注入 `msg.args`、指定变量的 `msg.state` 和资源路径 `msg.host`；返回 state 在变量锁下原子提交，运行输出移除 state/host，避免每步重复快照。不能用长期等待代码占用状态锁；长任务应通过 timer、短节点和分派推进。普通变量引用新增可选 `path`，支持 `$deviceKey` 作为单一对象键；不执行表达式。
+
+新增 `trigger.start`、`flow.dispatch {flowId,items:ValueRef}`、`flow.cancel {flowId,context:ValueRef}`。`Flow.scope:'device'` 按 transportId/deviceKey/deviceGeneration 单飞；分派任务脱离设置窗口生命周期，关闭窗口不取消已发设备事务。启动节点在全部 enabled 流程启用后执行，单次分派最多 64 项，各项独立报告接收结果。
+
+通用宿主节点为 `transport.enumerate/open/close/exchange/exchangeMany/cancel/recover/completeEffect`、`file.resolve/workspace/register/importCompanions`、`state.load/save`，参数通过 `args` 值引用传入。USB Printer 使用显式枚举和打开、设备代次校验、事务 FIFO、取消后收尾、跨进程设备租约。exchangeMany 消费已注册 JSONL 文件资源（每行 requestHex 等），不让固件字节穿过消息；上限 512 MiB、200 万行、单行 1 MiB。
+
+`effect:true` 在发请求前写入持久未知结果标记；只有业务确认终态后显式 completeEffect 清除，失败、取消和 close/open 不清除。recover 必须携带 `confirmed:true`，表示操作者已实际复位设备。Python 与流程负责协议及业务，通用传输不内置业务模拟器。
+
+`file.importCompanions` 参数为 `{resourceId,paths}`：仅按已选择资源原始目录下的安全相对路径建立附件快照，返回 `references/missingResources`；新工程由 Python 解析配置决定 paths，宿主不解析业务配置内容。`import_asset_bytes({name,bytesBase64})` 将本地设计库图片/字体持久化到工作副本，返回普通资源描述；每项上限 64 MiB。
+
+`presentation.chrome:'project'` 由工程控件承担运行界面，运行状态可通过 `{source:'runtime',path:'state'|'error'|'locale'}` 绑定；`runtimeRetry` 事件提供重试入口。旧后端提供程序和 schema 3 的接口保留兼容，默认工程的 backends 为空且不附带任何演示资源。

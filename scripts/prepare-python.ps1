@@ -6,11 +6,12 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $sourceRoot = Join-Path $projectRoot 'resources/python'
 $source = Get-Content -LiteralPath (Join-Path $sourceRoot 'runtime-source.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-if (!$CacheDirectory) { $CacheDirectory = Join-Path $projectRoot '.cache/python' }
+if (!$CacheDirectory) { $CacheDirectory = Join-Path $projectRoot '.cache/python/x86_64-pc-windows-msvc' }
 $CacheDirectory = [IO.Path]::GetFullPath($CacheDirectory)
 [IO.Directory]::CreateDirectory($CacheDirectory) | Out-Null
 if (!$ArchivePath) {
-    $ArchivePath = Join-Path $CacheDirectory 'python-3.14.8-embed-amd64.zip'
+    $ArchivePath = Join-Path $projectRoot '.cache/python/python-3.14.8-embed-amd64.zip'
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $ArchivePath)) | Out-Null
     if (!(Test-Path -LiteralPath $ArchivePath)) {
         Invoke-WebRequest -UseBasicParsing -Uri $source.url -OutFile $ArchivePath
     }

@@ -1,4 +1,5 @@
 mod export;
+mod flow_services;
 mod preview_host;
 mod project_package;
 mod resources;
@@ -8,6 +9,7 @@ mod runtime_windows;
 mod session;
 mod startup;
 pub mod tooling;
+mod usb_printer;
 mod window_settings;
 mod workspace;
 
@@ -54,8 +56,6 @@ pub struct DesktopState {
     preview_update_status: Mutex<String>,
     preview_closing: AtomicU64,
     main_close_pending: AtomicBool,
-    #[cfg(feature = "native-preview-smoke")]
-    native_preview_smoke_report: Mutex<Option<(PathBuf, Value)>>,
     transition: Mutex<()>,
     shutting_down: AtomicBool,
 }
@@ -172,7 +172,7 @@ async fn get_initial_project(
     let project = if let Some(path) = state.project_path.lock().await.clone() {
         load_project(&path)?
     } else {
-        serde_json::from_str(include_str!("../../../resources/example/project.json"))
+        serde_json::from_str(include_str!("../../../resources/default/project.json"))
             .map_err(error)?
     };
     let mut project = project;
@@ -745,6 +745,14 @@ async fn forward_runtime_event(
         payload.insert("generation".into(), json!(generation));
     }
     let _ = app.emit("runtime-event", payload);
+    if event.kind == "transport.devices" {
+        if preview_generation.load(Ordering::Acquire) == generation {
+            app.state::<DesktopState>()
+                .runtime_windows
+                .reconcile_transport(app, &event.data)
+                .await;
+        }
+    }
     if event.kind == "backend.event" && event.data["kind"] == "snapshot" {
         if preview_generation.load(Ordering::Acquire) == generation {
             let state = app.state::<DesktopState>();
@@ -1320,459 +1328,6 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     }
 }
 
-#[cfg(feature = "native-preview-smoke")]
-async fn eval_native_json(window: &tauri::WebviewWindow, script: &str) -> Result<Value> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let sender = Arc::new(std::sync::Mutex::new(Some(sender)));
-    let callback_sender = sender.clone();
-    window
-        .eval_with_callback(script.to_owned(), move |result| {
-            if let Some(sender) = callback_sender.lock().unwrap().take() {
-                let _ = sender.send(result);
-            }
-        })
-        .map_err(error)?;
-    let result = tokio::time::timeout(Duration::from_secs(5), receiver)
-        .await
-        .map_err(|_| "等待预览 WebView 脚本回调超时")?
-        .map_err(error)?;
-    serde_json::from_str(&result).map_err(error)
-}
-
-#[cfg(feature = "native-preview-smoke")]
-async fn wait_native_eval(
-    window: &tauri::WebviewWindow,
-    script: &str,
-    predicate: impl Fn(&Value) -> bool,
-    timeout_message: &str,
-) -> Result<Value> {
-    tokio::time::timeout(Duration::from_secs(15), async {
-        loop {
-            if let Ok(Ok(value)) =
-                tokio::time::timeout(Duration::from_secs(3), eval_native_json(window, script)).await
-            {
-                if predicate(&value) {
-                    return Ok(value);
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .map_err(|_| timeout_message.to_owned())?
-}
-
-#[cfg(feature = "native-preview-smoke")]
-async fn run_native_preview_child_smoke(app: tauri::AppHandle, report_path: PathBuf) -> Result<()> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Runner preview main window 未创建")?;
-    if !window.is_visible().map_err(error)? {
-        return Err("Runner preview window 初始不可见".into());
-    }
-    let route = wait_native_eval(
-        &window,
-        "({preview:Boolean(document.querySelector('.preview-screen')), buttons:Array.from(document.querySelectorAll('.widget-button fluent-button')).map(button=>button.textContent.trim())})",
-        |value| value["preview"] == true && value["buttons"].as_array().is_some_and(|buttons| buttons.iter().any(|item| item.as_str() == Some("打开连接")) && buttons.iter().any(|item| item.as_str() == Some("读取温度"))),
-        "Runner child 未挂载预览界面",
-    ).await?;
-    let clicked = eval_native_json(&window,"(() => { const button=Array.from(document.querySelectorAll('.widget-button fluent-button')).find(item=>item.textContent.trim()==='打开连接'); if(!button)return false; button.click(); return true; })()").await?;
-    if clicked != true {
-        return Err("Runner child找不到打开连接控件".into());
-    }
-    wait_native_snapshot(
-        &app,
-        |snapshot| {
-            snapshot
-                .connections
-                .get("sensor")
-                .and_then(|value| value.get("status"))
-                .and_then(Value::as_str)
-                == Some("open")
-        },
-        "Runner child未能打开模拟连接",
-    )
-    .await?;
-    let clicked = eval_native_json(&window,"(() => { const button=Array.from(document.querySelectorAll('.widget-button fluent-button')).find(item=>item.textContent.trim()==='读取温度'); if(!button)return false; button.click(); return true; })()").await?;
-    if clicked != true {
-        return Err("Runner child找不到读取温度控件".into());
-    }
-    let snapshot = wait_native_snapshot(
-        &app,
-        |snapshot| {
-            snapshot
-                .variables
-                .get("temperature")
-                .and_then(Value::as_f64)
-                == Some(23.6)
-        },
-        "Runner child没有读取到23.6°C",
-    )
-    .await?;
-    let rendered = wait_native_eval(&window,"Array.from(document.querySelectorAll('.metric-value')).some(element=>element.textContent.includes('23.6'))",|value|value.as_bool()==Some(true),"Runner child未渲染温度值").await?;
-    let report = json!({
-        "success": true,
-        "pid": std::process::id(),
-        "previewVisible": window.is_visible().map_err(error)?,
-        "previewScreenMounted": route["preview"],
-        "connectOpened": snapshot.connections["sensor"]["status"],
-        "temperature": snapshot.variables["temperature"],
-        "temperatureRendered": rendered,
-    });
-    if let Some(parent) = report_path.parent() {
-        std::fs::create_dir_all(parent).map_err(error)?;
-    }
-    std::fs::write(
-        &report_path,
-        serde_json::to_vec_pretty(&report).map_err(error)?,
-    )
-    .map_err(error)?;
-    Ok(())
-}
-
-#[cfg(feature = "native-preview-smoke")]
-async fn run_native_preview_smoke(app: tauri::AppHandle, report_path: PathBuf) -> Result<()> {
-    let main = app.get_webview_window("main").ok_or("Studio主窗口未创建")?;
-    if !main.is_visible().map_err(error)? {
-        return Err("Studio主窗口不可见".into());
-    }
-    wait_native_eval(
-        &main,
-        "Boolean(document.querySelector('.studio-shell'))",
-        |value| value.as_bool() == Some(true),
-        "Studio编辑器未挂载",
-    )
-    .await?;
-    let project: Project =
-        serde_json::from_str(include_str!("../../../resources/example/project.json"))
-            .map_err(error)?;
-    let state = app.state::<DesktopState>();
-    let initial_generation = state.preview_generation.load(Ordering::Acquire);
-    open_preview_window(project.clone(), app.clone(), state).await?;
-    let host = app
-        .state::<DesktopState>()
-        .preview_process
-        .lock()
-        .await
-        .clone()
-        .ok_or("Runner preview子进程未创建")?;
-    let child_pid = host.pid().await.ok_or("无法获取Runner preview PID")?;
-    if child_pid == std::process::id() {
-        return Err("preview仍运行在Studio进程内".into());
-    }
-    open_preview_window(project.clone(), app.clone(), app.state::<DesktopState>()).await?;
-    if host.pid().await != Some(child_pid) {
-        return Err("重复打开预览重建了Runner进程".into());
-    }
-    open_logic_window(app.clone(), None, None, app.state::<DesktopState>()).await?;
-    let logic = app
-        .get_webview_window("logic")
-        .ok_or("逻辑编辑窗口未创建")?;
-    if !logic.is_visible().map_err(error)? || app.webview_windows().len() != 2 {
-        return Err("Studio主窗与逻辑窗未同时可见".into());
-    }
-    let initial: PreviewState =
-        serde_json::from_value(host.request("get_preview_state", json!({})).await?)
-            .map_err(error)?;
-    if !initial.running || initial.pid != Some(child_pid) {
-        return Err("child state没有报告独立运行PID".into());
-    }
-
-    let child_report_path = std::env::var_os("HMI_NATIVE_PREVIEW_CHILD_REPORT")
-        .map(PathBuf::from)
-        .ok_or("缺少child smoke report路径")?;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if child_report_path.is_file() {
-                return Ok::<(), String>(());
-            }
-            if !host.is_alive().await {
-                return Err("Runner child在DOM smoke完成前退出".into());
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .map_err(|_| "等待Runner child原生DOM smoke超时")??;
-    let child_report: Value =
-        serde_json::from_slice(&std::fs::read(&child_report_path).map_err(error)?)
-            .map_err(error)?;
-    if child_report["success"] != true
-        || child_report["temperature"] != 23.6
-        || child_report["temperatureRendered"] != true
-    {
-        return Err(format!("Runner child原生DOM smoke失败: {child_report}"));
-    }
-
-    let mut delayed: Value = serde_json::to_value(&project).map_err(error)?;
-    let flow = delayed["flows"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|flow| flow["id"] == "flow_read")
-        .unwrap();
-    let nodes = flow["nodes"].as_array_mut().unwrap();
-    nodes.insert(1,json!({"id":"native_delay","kind":"delay","label":"旧版本延时","position":{"x":180,"y":130},"config":{"durationMs":900}}));
-    let edges = flow["edges"].as_array_mut().unwrap();
-    edges[0]["target"] = json!("native_delay");
-    edges.push(json!({"id":"native_delay_edge","source":"native_delay","sourcePort":"out","target":"read_command","targetPort":"in"}));
-    let delayed_project: Project = serde_json::from_value(delayed).map_err(error)?;
-    let first_update = host
-        .request(
-            "apply_preview_update",
-            json!({"revision":1,"project":delayed_project,"expectedGeneration":initial.generation}),
-        )
-        .await?;
-    if first_update["status"] != "applied" {
-        return Err(format!("新流程版本未即时应用: {first_update}"));
-    }
-    let run_id: String = serde_json::from_value(host.request("trigger_flow",json!({"flowId":"flow_read","message":{"payload":null},"inputs":{},"expectedGeneration":initial.generation})).await?).map_err(error)?;
-
-    let mut waiting_project: Value = serde_json::to_value(&delayed_project).map_err(error)?;
-    waiting_project["connections"][0]["baudRate"] = json!(57600);
-    waiting_project["flows"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|flow| flow["id"] == "flow_read")
-        .unwrap()["nodes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|node| node["id"] == "native_delay")
-        .unwrap()["config"]["durationMs"] = json!(100);
-    waiting_project["pages"][0]["widgets"][0]["props"]["text"] = json!("等待资源切换");
-    let waiting_update = host
-        .request(
-            "apply_preview_update",
-            json!({"revision":2,"project":waiting_project,"expectedGeneration":initial.generation}),
-        )
-        .await?;
-    if waiting_update["status"] != "waiting" {
-        return Err(format!("资源更新没有等待旧run: {waiting_update}"));
-    }
-    let waiting_state: PreviewState =
-        serde_json::from_value(host.request("get_preview_state", json!({})).await?)
-            .map_err(error)?;
-    if waiting_state.pending_revision != Some(2) || waiting_state.update_status != "waiting" {
-        return Err("资源切换等待状态缺少pending revision".into());
-    }
-
-    let mut latest_project: Value = serde_json::to_value(&delayed_project).map_err(error)?;
-    latest_project["flows"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|flow| flow["id"] == "flow_read")
-        .unwrap()["nodes"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|node| node["id"] == "native_delay")
-        .unwrap()["config"]["durationMs"] = json!(0);
-    latest_project["pages"][0]["widgets"][0]["props"]["text"] = json!("跨进程热更新成功");
-    let third_update = host
-        .request(
-            "apply_preview_update",
-            json!({"revision":3,"project":latest_project,"expectedGeneration":initial.generation}),
-        )
-        .await?;
-    if third_update["status"] != "applied" {
-        return Err(format!("最新候选未合并应用: {third_update}"));
-    }
-    let old_run_snapshot = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let snapshot: RuntimeSnapshot = serde_json::from_value(
-                host.request(
-                    "runtime_snapshot",
-                    json!({"expectedGeneration":initial.generation}),
-                )
-                .await?,
-            )
-            .map_err(error)?;
-            if snapshot.logs.iter().any(|event| {
-                event.run_id.as_deref() == Some(&run_id) && event.kind == "run.completed"
-            }) {
-                return Ok::<RuntimeSnapshot, String>(snapshot);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .map_err(|_| "旧revision run未自然完成")??;
-    let old_completion = old_run_snapshot
-        .logs
-        .iter()
-        .find(|event| event.run_id.as_deref() == Some(&run_id) && event.kind == "run.completed")
-        .ok_or("旧run完成事件缺失")?;
-    if old_completion.revision != Some(1) {
-        return Err(format!(
-            "旧run事件未标记旧revision: {:?}",
-            old_completion.revision
-        ));
-    }
-    let new_run_id: String = serde_json::from_value(host.request("trigger_flow",json!({"flowId":"flow_read","message":{"payload":null},"inputs":{},"expectedGeneration":initial.generation})).await?).map_err(error)?;
-    let new_run_snapshot = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let snapshot: RuntimeSnapshot = serde_json::from_value(
-                host.request(
-                    "runtime_snapshot",
-                    json!({"expectedGeneration":initial.generation}),
-                )
-                .await?,
-            )
-            .map_err(error)?;
-            if snapshot.logs.iter().any(|event| {
-                event.run_id.as_deref() == Some(&new_run_id) && event.kind == "run.completed"
-            }) {
-                return Ok::<RuntimeSnapshot, String>(snapshot);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .map_err(|_| "新revision流程未使用热更新逻辑")??;
-    let new_completion = new_run_snapshot
-        .logs
-        .iter()
-        .find(|event| event.run_id.as_deref() == Some(&new_run_id) && event.kind == "run.completed")
-        .ok_or("新版run完成事件缺失")?;
-    if new_completion.revision != Some(2) {
-        return Err(format!(
-            "新run未使用更新后的revision: {:?}",
-            new_completion.revision
-        ));
-    }
-
-    let mut resource_project: Value = serde_json::to_value(&latest_project).map_err(error)?;
-    resource_project["connections"][0]["baudRate"] = json!(115200);
-    let fourth_update = host.request("apply_preview_update",json!({"revision":4,"project":resource_project,"expectedGeneration":initial.generation})).await?;
-    if fourth_update["status"] != "applied" {
-        return Err(format!("空闲时资源重配失败: {fourth_update}"));
-    }
-    let latest: PreviewState =
-        serde_json::from_value(host.request("get_preview_state", json!({})).await?)
-            .map_err(error)?;
-    if latest.revision != 4
-        || latest.pending_revision.is_some()
-        || latest.update_status != "applied"
-        || latest.pid != Some(child_pid)
-    {
-        return Err("Runner state revision/PID与最新应用状态不一致".into());
-    }
-    if latest
-        .snapshot
-        .connections
-        .get("sensor")
-        .and_then(|value| value.get("status"))
-        .and_then(Value::as_str)
-        != Some("open")
-    {
-        return Err("资源切换后原本打开的模拟连接没有保持打开".into());
-    }
-    let inspect = host
-        .request(
-            "native_smoke_inspect",
-            json!({"script":"document.body.innerText.includes('跨进程热更新成功')"}),
-        )
-        .await?;
-    if inspect != true {
-        return Err(format!("预览DOM没有更新到新界面: {inspect}"));
-    }
-    if host.pid().await != Some(child_pid) {
-        return Err("应用热更新期间重启了Runner子进程".into());
-    }
-    let latest: PreviewState =
-        serde_json::from_value(host.request("get_preview_state", json!({})).await?)
-            .map_err(error)?;
-    let mut invalid_project = latest.project.clone().ok_or("缺少当前预览工程")?;
-    invalid_project.pages[0].widgets[0].kind = "invalid-native-probe".into();
-    let invalid_update = host
-        .request(
-            "apply_preview_update",
-            json!({"revision":5,"project":invalid_project,"expectedGeneration":initial.generation}),
-        )
-        .await?;
-    let after_invalid: PreviewState =
-        serde_json::from_value(host.request("get_preview_state", json!({})).await?)
-            .map_err(error)?;
-    if invalid_update["status"] != "invalid"
-        || after_invalid.revision != 4
-        || after_invalid.update_status != "invalid"
-        || after_invalid.pid != Some(child_pid)
-    {
-        return Err("无效候选没有保留最近有效版本和失败状态".into());
-    }
-    let state = app.state::<DesktopState>();
-    let probe_runner = state.resources.template().join(runner_relative());
-    let probe = preview_host::PreviewHostProcess::launch_disconnect_probe(
-        &probe_runner,
-        &state.resources.root,
-        &state.workspace.root(),
-        &project,
-        0,
-    )
-    .await?;
-    let probe_pid = probe.pid().await.ok_or("断线验收子进程未启动")?;
-    if probe_pid == child_pid || probe_pid == std::process::id() {
-        return Err("断线验收未创建独立子进程".into());
-    }
-    probe
-        .request("open_connection", json!({"connectionId":"sensor"}))
-        .await?;
-    probe.peer.disconnect()?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while probe.is_alive().await {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .map_err(|_| "控制通道断开后Runner未收尾退出")?;
-    let report = json!({
-        "success":true,"platform":hmi_core::host_target(),"studioPid":std::process::id(),"previewPid":child_pid,
-        "mainVisible":main.is_visible().map_err(error)?,"logicVisible":logic.is_visible().map_err(error)?,
-        "previewVisible":child_report["previewVisible"],"previewScreenMounted":child_report["previewScreenMounted"],
-        "duplicateOpenSamePid":true,"simulatedConnectionOpened":child_report["connectOpened"]=="open",
-        "snapshotTemperature":child_report["temperature"],"temperatureRendered":child_report["temperatureRendered"],
-        "resourceUpdateWaited":waiting_update["status"]=="waiting","pendingCandidateReplaced":third_update["status"]=="applied",
-        "oldRunCompletedOnRevision":old_completion.revision,"newRunCompletedOnRevision":new_completion.revision,
-        "newRevisionApplied":latest.revision,"resourceConnectionStillOpen":true,
-        "hotUpdatePidUnchanged":true,"invalidCandidateRejected":true,
-        "ipcDisconnectChildExited":true,"disconnectProbePid":probe_pid,"mainCloseGeneration":initial_generation+1
-    });
-    *app.state::<DesktopState>()
-        .native_preview_smoke_report
-        .lock()
-        .await = Some((report_path, report));
-    main.close().map_err(error)?;
-    Ok(())
-}
-
-#[cfg(feature = "native-preview-smoke")]
-async fn wait_native_snapshot(
-    app: &tauri::AppHandle,
-    predicate: impl Fn(&RuntimeSnapshot) -> bool,
-    timeout_message: &str,
-) -> Result<RuntimeSnapshot> {
-    tokio::time::timeout(Duration::from_secs(15), async {
-        loop {
-            let session = app
-                .state::<DesktopState>()
-                .session
-                .lock()
-                .await
-                .clone()
-                .ok_or_else(|| "运行会话在流程测试期间结束".to_string())?;
-            let snapshot = session.runtime.snapshot().await;
-            if predicate(&snapshot) {
-                return Ok(snapshot);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .map_err(|_| timeout_message.to_string())?
-}
 #[tauri::command]
 async fn trigger_flow(
     flow_id: String,
@@ -1993,6 +1548,48 @@ async fn import_asset(path: String, state: State<'_, DesktopState>) -> Result<Va
     )
 }
 #[tauri::command]
+async fn import_asset_bytes(
+    name: String,
+    bytes_base64: String,
+    state: State<'_, DesktopState>,
+) -> Result<Value> {
+    state.studio()?;
+    use base64::Engine;
+    if bytes_base64.len() > 90 * 1024 * 1024 {
+        return Err("单个资源最大 64 MiB".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(bytes_base64)
+        .map_err(error)?;
+    if bytes.len() > 64 * 1024 * 1024 {
+        return Err("单个资源最大 64 MiB".into());
+    }
+    let suffix = Path::new(&name)
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ![
+        "png", "jpg", "jpeg", "webp", "gif", "woff", "woff2", "ttf", "otf",
+    ]
+    .contains(&suffix.as_str())
+    {
+        return Err("设计库资源仅支持图片和字体".into());
+    }
+    let id = format!("asset_{}", uuid::Uuid::new_v4().simple());
+    let relative = format!("assets/{id}.{suffix}");
+    let destination = state.workspace.root().join(&relative);
+    std::fs::create_dir_all(destination.parent().unwrap()).map_err(error)?;
+    let mut staged =
+        tempfile::NamedTempFile::new_in(destination.parent().unwrap()).map_err(error)?;
+    use std::io::Write;
+    staged.write_all(&bytes).map_err(error)?;
+    staged.persist(&destination).map_err(error)?;
+    Ok(
+        json!({"id":id,"path":relative,"absolutePath":destination,"name":name,"size":bytes.len(),"sha256":sha256(&destination)?}),
+    )
+}
+#[tauri::command]
 async fn resolve_assets(project: Project, state: State<'_, DesktopState>) -> Result<Value> {
     let directory = if state.mode == AppMode::Studio {
         Some(state.workspace.root())
@@ -2170,16 +1767,6 @@ async fn handle_preview_rpc(
             app.exit(0);
             Ok(Value::Null)
         }
-        #[cfg(feature = "native-preview-smoke")]
-        "native_smoke_inspect" => {
-            let window = app
-                .get_webview_window("main")
-                .ok_or("预览 main window 不存在")?;
-            let script = payload["script"]
-                .as_str()
-                .ok_or("缺少 native smoke script")?;
-            eval_native_json(&window, script).await
-        }
         _ => Err(format!("不支持的预览 RPC: {method}")),
     }
 }
@@ -2249,7 +1836,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
             }
         }
     } else {
-        match serde_json::from_str(include_str!("../../../resources/example/project.json")) {
+        match serde_json::from_str(include_str!("../../../resources/default/project.json")) {
             Ok(project) => project,
             Err(problem) => {
                 startup::fatal(&problem.to_string());
@@ -2320,8 +1907,6 @@ pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
         preview_update_status: Mutex::new("applied".into()),
         preview_closing: AtomicU64::new(0),
         main_close_pending: AtomicBool::new(false),
-        #[cfg(feature = "native-preview-smoke")]
-        native_preview_smoke_report: Mutex::new(None),
         transition: Mutex::new(()),
         shutting_down: AtomicBool::new(false),
     };
@@ -2357,6 +1942,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
             save_runtime_settings,
             export_project,
             import_asset,
+            import_asset_bytes,
             resolve_assets,
             workspace::workspace_state,
             workspace::apply_workspace_operations,
@@ -2454,46 +2040,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
         .build(context)
         .expect("Cannot build HMI application");
 
-    #[cfg(feature = "native-preview-smoke")]
-    let native_preview_smoke_report = args
-        .iter()
-        .position(|arg| arg == "--native-preview-smoke-report")
-        .and_then(|index| args.get(index + 1))
-        .map(PathBuf::from);
-    #[cfg(feature = "native-preview-smoke")]
-    let native_preview_child_report =
-        std::env::var_os("HMI_NATIVE_PREVIEW_CHILD_REPORT").map(PathBuf::from);
-    #[cfg(feature = "native-preview-smoke")]
-    let mut native_preview_smoke_started = false;
     app.run(move |app, event| {
-        #[cfg(feature = "native-preview-smoke")]
-        if matches!(&event, tauri::RunEvent::Ready) && !native_preview_smoke_started {
-            let preview_host_mode = app.state::<DesktopState>().preview_host_mode;
-            let report = if preview_host_mode {
-                native_preview_child_report.clone()
-            } else {
-                native_preview_smoke_report.clone()
-            };
-            if let Some(report_path) = report {
-                native_preview_smoke_started = true;
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let smoke_result = if preview_host_mode {
-                        run_native_preview_child_smoke(app.clone(), report_path.clone()).await
-                    } else {
-                        run_native_preview_smoke(app.clone(), report_path.clone()).await
-                    };
-                    if let Err(smoke_error) = smoke_result {
-                        let failure = json!({"success":false,"error":smoke_error});
-                        let _ = std::fs::write(
-                            &report_path,
-                            serde_json::to_vec_pretty(&failure).unwrap_or_default(),
-                        );
-                        app.exit(1);
-                    }
-                });
-            }
-        }
         if let tauri::RunEvent::Exit = event {
             tauri::async_runtime::block_on(async {
                 let state = app.state::<DesktopState>();
@@ -2508,29 +2055,6 @@ pub fn run(context: tauri::Context<tauri::Wry>, mode: AppMode) {
                         state.preview_closing.store(generation, Ordering::Release);
                     }
                     let _ = preview_window.destroy();
-                }
-                #[cfg(feature = "native-preview-smoke")]
-                let smoke_report = { state.native_preview_smoke_report.lock().await.take() };
-                #[cfg(feature = "native-preview-smoke")]
-                if let Some((report_path, mut report)) = smoke_report {
-                    let remaining_windows = app.webview_windows();
-                    let session_stopped = state.session.lock().await.is_none();
-                    report["windowsRemainingAfterMainClose"] =
-                        json!(remaining_windows.keys().collect::<Vec<_>>());
-                    report["sessionStoppedAfterMainClose"] = json!(session_stopped);
-                    let preview_stopped = state.preview_process.lock().await.is_none();
-                    report["previewProcessStoppedAfterMainClose"] = json!(preview_stopped);
-                    report["success"] = json!(
-                        report["success"] == true
-                            && remaining_windows.is_empty()
-                            && session_stopped
-                            && preview_stopped
-                    );
-                    if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
-                        if let Err(report_error) = std::fs::write(report_path, bytes) {
-                            eprintln!("native preview smoke report write failed: {report_error}");
-                        }
-                    }
                 }
             });
         }

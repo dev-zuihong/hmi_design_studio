@@ -1,7 +1,9 @@
 /* Editor chrome only: runtime widgets and Runner retain their existing sizing. */
 .studio-shell .studio-workspace{min-height:160px;grid-template-columns:var(--library-width,220px) minmax(0,1fr) var(--inspector-width,300px)}
 .studio-shell .studio-workspace.left-collapsed>.library,.studio-shell .studio-workspace.right-collapsed>.inspector{display:none}
-.studio-shell .library-tabs{height:34px;padding:0 12px;gap:20px}
+.studio-shell .library-tabs{height:34px;padding:0 6px;gap:4px}
+.studio-shell .library-tabs button{flex:1;justify-content:center;white-space:nowrap;gap:4px;padding:0 3px;font-size:11px}
+.studio-shell .library-tabs button svg{flex-shrink:0}
 .studio-shell .library-search{margin:8px 10px;flex-shrink:0}
 .studio-shell .library-search input{height:28px;font-size:12px}
 .studio-shell .library-search>svg{top:7px}

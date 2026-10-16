@@ -61,13 +61,11 @@ export function useRuntime(options: { previewWindow?: boolean; runtimeWindow?: b
   const expectedGeneration = () => generation.value >= 0 ? { expectedGeneration: generation.value } : {}
   function applySnapshot(next: Snapshot, previousContext = context.value) {
     if (!hasSnapshot) { snapshot.value = next; hasSnapshot = true; return }
-    const resolve = (binding: any, state: Snapshot, scope: Record<string, any>) => binding.source === 'backend'
-      ? resolveRuntimePath(state.backends?.[binding.key], binding.path, scope)
-      : resolveRuntimePath(scope, binding.path, scope)
+    const resolve = (binding: any, state: Snapshot, scope: Record<string, any>) => resolveRuntimePath(binding.source === 'backend' ? state.backends?.[binding.key] : binding.source === 'variable' ? state.variables[binding.key] ?? previewProject.value?.variables.find(variable=>variable.id===binding.key)?.initial : scope, binding.path, scope)
     const comparable = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item)
     for (const widget of previewProject.value?.pages.flatMap(page => page.widgets) ?? []) {
       const binding = widget.bindings.value
-      if (binding?.source !== 'backend' && binding?.source !== 'context') continue
+      if (binding?.source !== 'backend' && binding?.source !== 'context' && binding?.source !== 'variable') continue
       if (comparable(resolve(binding, snapshot.value, previousContext)) === comparable(resolve(binding, next, context.value))) continue
       delete inputs.value[widget.id]
       liveInputs.delete(widget.id)
@@ -80,7 +78,7 @@ export function useRuntime(options: { previewWindow?: boolean; runtimeWindow?: b
     for (const widget of project.pages.flatMap(page => page.widgets).filter(widget => ['input','textarea','select','switch','checkbox','radio','spinbox','slider','date','time','datetime','table','list','tree','tabs','stack','file-picker','byte-range'].includes(widget.kind))) {
       const binding = widget.bindings.value
       if(binding?.source==='backend'||binding?.source==='context')continue
-      if (binding?.source === 'variable') inputs.value[widget.id] = live?.variables[binding.key] ?? project.variables.find(variable => variable.id === binding.key)?.initial
+      if (binding?.source === 'variable') inputs.value[widget.id] = resolveRuntimePath(live?.variables[binding.key] ?? project.variables.find(variable => variable.id === binding.key)?.initial,binding.path,context.value)
       else if (binding?.source === 'literal') inputs.value[widget.id] = binding.value
       else if (binding?.source === 'point') {
         const point = live?.points[binding.key]
@@ -299,10 +297,11 @@ export function useRuntime(options: { previewWindow?: boolean; runtimeWindow?: b
   }
   async function start(project: Project) {
     busy.value = true
+    lastError.value = ''
     try {
       await subscribe(); epoch++; hasSnapshot = false; invalidatedInputs.clear(); events.value = []; replayPending.clear(); initializeInputs(project)
       previewProject.value=project;currentPage.value = project.pages[0]?.id ?? ''; await call('start_preview', { project }); running.value = true; await refresh()
-    } finally { busy.value = false }
+    } catch(error) { running.value = false; lastError.value = String(error); throw error } finally { busy.value = false }
   }
   async function stop() { busy.value = true; try { await call('stop_preview', expectedGeneration()); lifecycleRevision++; stopped() } finally { busy.value = false } }
   async function act(action: UiAction, value?: unknown) {
@@ -311,7 +310,7 @@ export function useRuntime(options: { previewWindow?: boolean; runtimeWindow?: b
     else if (action.kind === 'stopFlow') await call('stop_flow', { flowId: action.flowId, ...expectedGeneration() })
     else {
       const effectiveInputs:Record<string,unknown>={}
-      for(const widget of previewProject.value?.pages.flatMap(page=>page.widgets)??[]){const binding=widget.bindings.value;if(binding?.source==='backend')effectiveInputs[widget.id]=resolveRuntimePath(snapshot.value.backends?.[binding.key],binding.path,context.value);else if(binding?.source==='context')effectiveInputs[widget.id]=resolveRuntimePath(context.value,binding.path,context.value)}
+      for(const widget of previewProject.value?.pages.flatMap(page=>page.widgets)??[]){const binding=widget.bindings.value;if(binding?.source==='backend')effectiveInputs[widget.id]=resolveRuntimePath(snapshot.value.backends?.[binding.key],binding.path,context.value);else if(binding?.source==='context')effectiveInputs[widget.id]=resolveRuntimePath(context.value,binding.path,context.value);else if(binding?.source==='variable')effectiveInputs[widget.id]=resolveRuntimePath(snapshot.value.variables[binding.key]??previewProject.value?.variables.find(variable=>variable.id===binding.key)?.initial,binding.path,context.value)}
       await call('trigger_flow', { flowId: action.flowId, entryNodeId: action.entryNodeId, message: { payload: value ?? {}, ...(Object.keys(context.value).length?{context:{...context.value}}:{}) }, inputs: { ...effectiveInputs,...inputs.value }, ...expectedGeneration() })
     }
     await refresh()

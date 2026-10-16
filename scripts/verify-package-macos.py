@@ -1,10 +1,5 @@
 """Safely extract and verify a macOS Runner ZIP on a Mac.
 
-Examples:
-  python3 scripts/verify-package-macos.py artifacts/basic.zip --directory artifacts/basic-check --python absent
-  python3 scripts/verify-package-macos.py artifacts/python.zip --directory artifacts/python-check --python stdlib --cli artifacts/HMIStudio-macos-arm64-.../hmi-cli --expected-temperature 23.6
-  python3 scripts/verify-package-macos.py artifacts/native.zip --directory artifacts/native-check --native --cli /path/to/hmi-cli
-
 The verifier accepts only internal relative symlinks, preserves Unix execute
 bits, checks the complete release-manifest tree and app signature, and never
 overwrites or deletes an existing extraction directory.
@@ -266,7 +261,7 @@ def verify_python(resources, project, target, expectation, native):
     require(lock.get("packages") == project["python"].get("dependencyLock"),
             "Project and packaged Python dependency locks differ")
     if expectation == "stdlib":
-        require(lock.get("packages") == [], "Standard-library example contains third-party packages")
+        require(lock.get("packages") == [], "Standard-library package contains third-party packages")
     result = {"included": True, "version": runtime["version"], "platform": target_triple,
               "packages": [package.get("name") for package in lock.get("packages", [])]}
     if native:
@@ -332,7 +327,7 @@ def verify_project_resources(resources, project, target):
         verify_architecture(executable, PLATFORMS[target][1])
 
 
-def smoke(cli, app_resources, flow, timeout, expected_temperature):
+def smoke(cli, app_resources, flow, timeout):
     cli = cli.resolve(strict=True)
     require(cli.is_file() and cli.stat().st_mode & 0o111, "hmi-cli is missing or not executable")
     environment = os.environ.copy()
@@ -361,9 +356,6 @@ def smoke(cli, app_resources, flow, timeout, expected_temperature):
     require(process.returncode == 0, f"Packaged CLI smoke failed: {stderr or stdout}")
     result = json.loads(stdout)
     require(result.get("success") is True, "CLI did not report successful packaged smoke")
-    if expected_temperature is not None:
-        actual = result.get("snapshot", {}).get("variables", {}).get("temperature")
-        require(actual == expected_temperature, f"Unexpected smoke temperature: {actual!r}")
     return result
 
 
@@ -378,7 +370,6 @@ def main():
     parser.add_argument("--cli", type=Path, help="Native hmi-cli binary; runs a packaged headless smoke")
     parser.add_argument("--flow", default="flow_read")
     parser.add_argument("--timeout", type=float, default=120)
-    parser.add_argument("--expected-temperature", type=float)
     parser.add_argument("--report", type=Path, help="Write UTF-8 JSON verification evidence")
     args = parser.parse_args()
     require(sys.platform == "darwin", "macOS package verification must run on macOS")
@@ -406,7 +397,7 @@ def main():
               "platform": manifest["platform"], "application": str(app),
               "runnerExecutable": str(executable), "python": python, "smokeExecuted": False}
     if args.cli:
-        report["smoke"] = smoke(args.cli, resources, args.flow, args.timeout, args.expected_temperature)
+        report["smoke"] = smoke(args.cli, resources, args.flow, args.timeout)
         report["smokeExecuted"] = True
     if report_path:
         report_path.parent.mkdir(parents=True, exist_ok=True)

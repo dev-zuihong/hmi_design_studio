@@ -513,20 +513,20 @@ mod tests {
             "schemaVersion":1,"id":"test","name":"test","width":1280,"height":720,"pages":[],
             "assets":[{"id":"picture","path":"assets/picture.png"}],
             "connections":[{"id":"device","name":"Device","port":"sim://temperature","baudRate":115200,
-                "dataBits":8,"stopBits":1,"parity":"none","protocolId":"demo-temperature"}],
+                "dataBits":8,"stopBits":1,"parity":"none","protocolId":"test-protocol"}],
             "python":{"runtimeId":"3.14.8-win_amd64","dependencyLock":[]}
         }))
         .unwrap()
     }
 
     fn plugin_fixture(resources: &Resources) {
-        let plugin = resources.plugins().join("demo-temperature");
+        let plugin = resources.plugins().join("test-protocol");
         fs::create_dir_all(plugin.join("private-python")).unwrap();
         fs::create_dir_all(plugin.join("empty-state-directory")).unwrap();
         let executable = if crate::resources::release_platform() == "windows-x64" {
-            "demo-protocol.exe"
+            "test-protocol.exe"
         } else {
-            "demo-protocol"
+            "test-protocol"
         };
         write_executable(&plugin.join(executable));
         fs::write(
@@ -537,7 +537,7 @@ mod tests {
         fs::write(
             plugin.join("manifest.json"),
             serde_json::to_vec(&json!({
-                "id":"demo-temperature","name":"Demo temperature","version":"1.0.0","apiVersion":1,
+                "id":"test-protocol","name":"Test protocol","version":"1.0.0","apiVersion":1,
                 "target":hmi_core::host_target(),"executable":executable,
                 "configSchema":{"type":"object"},"commands":[],"points":[]
             }))
@@ -574,13 +574,13 @@ mod tests {
             assert!(runner_file.unix_mode().unwrap() & 0o111 != 0);
         }
         drop(runner_file);
-        let plugin_prefix = format!("{resources_prefix}plugins/demo-temperature/");
+        let plugin_prefix = format!("{resources_prefix}plugins/test-protocol/");
         assert!(names
             .iter()
             .any(|name| name == &format!("{plugin_prefix}empty-state-directory/")));
         assert!(!names.iter().any(|name| name.contains("runtime/python/")));
         assert!(names.iter().any(|name| name
-            == &format!("{resources_prefix}plugins/demo-temperature/private-python/required.dll")));
+            == &format!("{resources_prefix}plugins/test-protocol/private-python/required.dll")));
         assert!(names
             .iter()
             .any(|name| name == &format!("{resources_prefix}assets/picture.png")));

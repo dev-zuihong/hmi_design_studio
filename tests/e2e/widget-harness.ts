@@ -1,5 +1,4 @@
 import { createApp, h, reactive } from 'vue'
-import '../../src/lib/fluent'
 import WidgetTree from '../../src/components/WidgetTree.vue'
 import { createWidget, emptyProject, type RuntimeEvent, type UiAction } from '../../src/lib/model'
 import { i18n, projectLocale } from '../../src/lib/i18n'

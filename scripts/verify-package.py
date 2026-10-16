@@ -1,10 +1,5 @@
 """Verify and retain an exported Windows x64 runtime directory.
 
-Examples (run on the build/verification machine with standard Python 3.11+):
-  python scripts/verify-package.py artifacts/basic.zip --directory artifacts/basic-runtime --python absent
-  python scripts/verify-package.py artifacts/python.zip --directory artifacts/python-runtime --python stdlib --cli target/x86_64-pc-windows-msvc/release/hmi-cli.exe --expected-temperature 23.6
-  python scripts/verify-package.py artifacts/native-python.zip --directory "artifacts/native runtime" --python present --native --cli target/x86_64-pc-windows-msvc/release/hmi-cli.exe --report artifacts/native-verification.json
-
 Existing directories are never overwritten or deleted. --reuse verifies an
 already extracted directory against this exact ZIP, including empty directories.
 The optional CLI smoke uses only packaged resources, a separate working
@@ -171,7 +166,7 @@ def verify_python(directory, project, manifest, expected, native):
     return result
 
 
-def smoke(cli, directory, flow, timeout, expected_temperature):
+def smoke(cli, directory, flow, timeout):
     require(os.name == "nt", "Packaged CLI smoke requires Windows")
     environment = os.environ.copy()
     system = Path(environment.get("SystemRoot", "C:/Windows"))
@@ -194,9 +189,6 @@ def smoke(cli, directory, flow, timeout, expected_temperature):
     require(process.returncode == 0, f"Packaged smoke failed: {stderr or stdout}")
     result = json.loads(stdout)
     require(result.get("success") is True, "CLI did not report successful packaged smoke")
-    if expected_temperature is not None:
-        require(result.get("snapshot", {}).get("variables", {}).get("temperature") == expected_temperature,
-                "Packaged smoke returned an unexpected temperature")
     return result
 
 
@@ -210,7 +202,6 @@ def main():
     parser.add_argument("--cli", type=Path, help="Absolute or relative path to the final built hmi-cli.exe; enables packaged smoke")
     parser.add_argument("--flow", default="flow_read")
     parser.add_argument("--timeout", type=float, default=120)
-    parser.add_argument("--expected-temperature", type=float)
     parser.add_argument("--report", type=Path, help="Write UTF-8 JSON verification evidence outside the extracted directory")
     args = parser.parse_args()
     require(math.isfinite(args.timeout) and args.timeout > 0, "Timeout must be finite and positive")
@@ -230,7 +221,7 @@ def main():
               "archiveBytes": archive.stat().st_size, "directory": str(directory), "files": files,
               "directories": directories, "manifestVerified": True, "python": python, "smokeExecuted": False}
     if args.cli:
-        report["smoke"] = smoke(args.cli.resolve(strict=True), directory, args.flow, args.timeout, args.expected_temperature)
+        report["smoke"] = smoke(args.cli.resolve(strict=True), directory, args.flow, args.timeout)
         report["smokeExecuted"] = True
     if report_path:
         report_path.parent.mkdir(parents=True, exist_ok=True)

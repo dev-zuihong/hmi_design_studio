@@ -15,7 +15,7 @@ const current=computed(()=>items.value.find(item=>item.id===selected.value)??ite
 const backend=computed(()=>props.mode==='backends'?current.value as BackendConfig|undefined:undefined)
 const windowTemplate=computed(()=>props.mode==='windows'?current.value as WindowTemplate|undefined:undefined)
 const disabled=computed(()=>props.editor.readOnly.value||importing.value)
-function mutate(change:()=>void){props.editor.mutate(project=>{project.schemaVersion=3;change()})}
+function mutate(change:()=>void){props.editor.mutate(project=>{project.schemaVersion=Math.max(3,project.schemaVersion) as 3|4;change()})}
 function addBackend(provider?:{id:string;name:string;version:string;configSchema?:Record<string,any>}){const item:BackendConfig={id:newId('backend'),name:provider?.name??'新后端',providerId:provider?.id??'',providerVersion:provider?.version??'1.0.0',mode:'simulation',config:schemaDefaults(provider?.configSchema)};mutate(()=>{props.editor.project.value.backends??=[];props.editor.project.value.backends.push(item)});selected.value=item.id}
 function addWindow(){const item:WindowTemplate={id:newId('window'),pageId:props.editor.project.value.pages[0]?.id??'',title:'设备设置',width:900,height:650,minWidth:640,minHeight:480,instanceKey:'deviceKey'};mutate(()=>{props.editor.project.value.windows??=[];props.editor.project.value.windows.push(item)});selected.value=item.id}
 function update(key:string,value:unknown){if(!current.value)return;mutate(()=>{(current.value as any)[key]=value})}

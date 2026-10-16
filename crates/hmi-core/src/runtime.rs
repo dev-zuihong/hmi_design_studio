@@ -1,4 +1,6 @@
-use crate::{validate_project, CoreError, CoreResult, Flow, FlowNode, Project, ValueRef};
+use crate::{
+    validate_project, CodeModule, CoreError, CoreResult, Flow, FlowNode, Project, ValueRef,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -67,6 +69,24 @@ pub trait HostServices: Send + Sync + 'static {
         memory_mb: u64,
         cancel: CancellationToken,
     ) -> CoreResult<Option<Value>>;
+    async fn python_with_modules(
+        &self,
+        source: &str,
+        msg: Value,
+        modules: &[CodeModule],
+        timeout_ms: u64,
+        memory_mb: u64,
+        cancel: CancellationToken,
+    ) -> CoreResult<Option<Value>> {
+        if !modules.is_empty() {
+            return Err(CoreError::new(
+                "PYTHON_MODULES_UNSUPPORTED",
+                "宿主不支持工程代码库",
+            ));
+        }
+        self.python(source, msg, timeout_ms, memory_mb, cancel)
+            .await
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +178,7 @@ pub struct Runtime {
     events: broadcast::Sender<RuntimeEvent>,
     active_runs: AtomicUsize,
     runs_finished: Notify,
+    variable_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 struct ActiveRun(Arc<Runtime>);
@@ -224,6 +245,7 @@ impl Runtime {
             events,
             active_runs: AtomicUsize::new(0),
             runs_finished: Notify::new(),
+            variable_locks: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -563,6 +585,13 @@ impl Runtime {
                 return Ok(());
             }
             state.started = true;
+            // Start entries may dispatch into another enabled flow immediately.
+            // Admit all configured targets before spawning any start entry.
+            for definition in &self.project().flows {
+                if let Some(flow) = state.flows.get_mut(&definition.id) {
+                    flow.enabled = definition.enabled;
+                }
+            }
         }
         let project = self.project();
         for f in &project.flows {
@@ -622,6 +651,16 @@ impl Runtime {
             f.trigger_cancel.clone()
         };
         self.spawn_timer_triggers(flow, token);
+        for node in flow.nodes.iter().filter(|n| n.kind == "trigger.start") {
+            self.trigger_internal(
+                id,
+                Some(&node.id),
+                json!({"payload":null}),
+                json!({}),
+                true,
+                false,
+            )?;
+        }
         self.emit(
             "flow.changed",
             Some(id),
@@ -720,7 +759,19 @@ impl Runtime {
         if !inputs.is_object() {
             return Err(CoreError::new("INPUTS", "控件输入快照必须为对象"));
         }
-        let scope = window_scope(&message).to_owned();
+        let project = self.project();
+        let flow = project
+            .flows
+            .iter()
+            .find(|f| f.id == flow_id)
+            .ok_or_else(|| CoreError::new("FLOW_MISSING", "流程不存在"))?;
+        let mut message = message;
+        let scope = flow_scope(flow, &message)?;
+        if flow.scope.as_deref() == Some("device") {
+            if let Some(context) = message.get_mut("context").and_then(Value::as_object_mut) {
+                context.remove("windowInstanceId");
+            }
+        }
         let inputs = if prefer_runtime_inputs && scope.is_empty() {
             let state = self.state.lock().unwrap();
             let mut merged = state.inputs.clone();
@@ -734,12 +785,6 @@ impl Runtime {
         if serde_json::to_vec(&inputs)?.len() > MAX_MESSAGE_BYTES {
             return Err(CoreError::new("MESSAGE_LIMIT", "输入快照超过 1 MiB"));
         }
-        let project = self.project();
-        let flow = project
-            .flows
-            .iter()
-            .find(|f| f.id == flow_id)
-            .ok_or_else(|| CoreError::new("FLOW_MISSING", "流程不存在"))?;
         let node = match entry {
             Some(id) => flow.nodes.iter().find(|n| {
                 n.id == id
@@ -1119,8 +1164,27 @@ impl Runtime {
             ValueRef::Message { path } => get_path(message, path).cloned(),
             ValueRef::Context { path } => message
                 .get("context")
-                .and_then(|value| get_path(value, path))
+                .and_then(|value| {
+                    if path.is_empty() {
+                        Some(value)
+                    } else {
+                        get_path(value, path)
+                    }
+                })
                 .cloned(),
+            ValueRef::Runtime { path } => Some(match path.as_str() {
+                "state" => json!(if self.state.lock().unwrap().started {
+                    "running"
+                } else {
+                    "stopped"
+                }),
+                "locale" => json!(project
+                    .i18n
+                    .as_ref()
+                    .map(|i| i.default_locale.as_str())
+                    .unwrap_or("zh-CN")),
+                _ => json!(""),
+            }),
             ValueRef::Backend { key, path } => self
                 .state
                 .lock()
@@ -1130,7 +1194,17 @@ impl Runtime {
                 .and_then(|value| get_context_path(value, path, &message["context"]))
                 .cloned(),
             ValueRef::Input { key } => inputs.get(key).cloned(),
-            ValueRef::Variable { key } => self.state.lock().unwrap().variables.get(key).cloned(),
+            ValueRef::Variable { key, path } => self
+                .state
+                .lock()
+                .unwrap()
+                .variables
+                .get(key)
+                .and_then(|value| match path {
+                    Some(path) => get_context_path(value, path, &message["context"]),
+                    None => Some(value),
+                })
+                .cloned(),
             ValueRef::Point { key } => self
                 .state
                 .lock()
@@ -1165,6 +1239,9 @@ impl Runtime {
                         .custom_properties
                         .get(property)
                         .map(|entry| entry.value.clone())
+                        .or_else(|| {
+                            crate::design_system::resolve_widget_style(project, widget, property)
+                        })
                         .or_else(|| widget.props.get(property).cloned())
                         .ok_or_else(|| CoreError::new("UI_PROPERTY_MISSING", "组件没有此属性"))
                 };
@@ -1306,7 +1383,10 @@ impl Runtime {
                 }
                 message["payload"] = self.host.command_with_origin(text("connectionId"),text("command"),Value::Object(params),cancel,flow_id).await?;
             }
-            "backend.invoke" | "window.open" | "window.close" | "window.focus" | "file.open" | "file.save" => {
+            "backend.invoke" | "window.open" | "window.close" | "window.focus" | "file.open" | "file.save"
+            | "file.resolve" | "file.workspace" | "file.register" | "file.importCompanions" | "state.load" | "state.save"
+            | "transport.enumerate" | "transport.open" | "transport.close" | "transport.exchange"
+            | "transport.exchangeMany" | "transport.cancel" | "transport.recover" | "transport.completeEffect" => {
                 let mut args = Map::new();
                 if let Some(config) = node.config.get("args").and_then(Value::as_object) {
                     for (key, value) in config { args.insert(key.clone(), self.resolve(project, &serde_json::from_value(value.clone())?, message, inputs)?); }
@@ -1330,13 +1410,37 @@ impl Runtime {
                 set_path(message,node.config.get("path").and_then(Value::as_str).unwrap_or("payload"),value)?;
             }
             "variable.set" => {
-                let value = reference("value")?; let id = text("variableId");
+                let id = text("variableId");
+                let lock = self.variable_lock(id);
+                let _guard = lock.lock().await;
+                let value = reference("value")?;
                 let variable = project.variables.iter().find(|v|v.id == id).unwrap();
                 if !variable.accepts(&value) { return Err(CoreError::new("VARIABLE_TYPE","值不符合变量类型")); }
                 let before_properties = self.capture_custom_property_values(project, message, inputs);
                 self.state.lock().unwrap().variables.insert(id.into(),value.clone());
                 self.emit("variable.changed",Some(flow_id),Some(run_id),Some(&node.id),json!({"key":id,"value":value}));
                 self.fire_custom_property_events(project, before_properties, message, inputs, Some(flow_id)).await;
+            }
+            "flow.dispatch" => {
+                let items = reference("items")?;
+                let items = items.as_array().ok_or_else(|| CoreError::new("DISPATCH_ITEMS", "派发项必须为数组"))?;
+                if items.len() > 64 { return Err(CoreError::new("DISPATCH_LIMIT", "单次最多派发 64 项")); }
+                let mut admitted = Vec::new();
+                for item in items {
+                    check_message(item)?;
+                    // Each item is an independent device message. Never inherit a UI window scope.
+                    match self.trigger_internal(text("flowId"), node.config.get("entryNodeId").and_then(Value::as_str), item.clone(), json!({}), false, false) {
+                        Ok(id) => admitted.push(json!({"runId":id})),
+                        Err(error) => admitted.push(json!({"error":error})),
+                    }
+                }
+                message["dispatchResults"] = json!(admitted);
+            }
+            "flow.cancel" => {
+                let context = reference("context")?;
+                let target = project.flows.iter().find(|f| f.id == text("flowId")).ok_or_else(||CoreError::new("FLOW_MISSING","流程不存在"))?;
+                let scope = flow_scope(target, &json!({"context":context}))?;
+                if let Some((_,token)) = self.state.lock().unwrap().flows.get(text("flowId")).and_then(|f| f.running.get(&scope)) { token.cancel(); }
             }
             "ui.setProperty" => {
                 let widget_id = text("widgetId");
@@ -1385,10 +1489,38 @@ impl Runtime {
                 self.fire_custom_property_events(project, before_properties, message, inputs, Some(flow_id)).await;
             }
             "delay" => tokio::time::sleep(Duration::from_millis(number("durationMs",0))).await,
-            "python" => match self.host.python(text("code"),message.clone(),number("timeoutMs",5000),number("memoryMb",256),cancel).await? {
-                Some(output) => { check_message(&output)?; *message = output; }
-                None => return Ok(None),
-            },
+            "python" => {
+                let state_id = node.config.get("stateVariable").and_then(Value::as_str);
+                let lock = state_id.map(|id| self.variable_lock(id));
+                let _guard = match &lock { Some(lock) => Some(lock.lock().await), None => None };
+                let mut input = message.clone();
+                let mut args = Map::new();
+                if let Some(config) = node.config.get("args").and_then(Value::as_object) {
+                    for (key,value) in config { args.insert(key.clone(), self.resolve(project,&serde_json::from_value(value.clone())?,message,inputs)?); }
+                }
+                input["args"] = Value::Object(args);
+                if let Some(id) = state_id {
+                    input["state"] = self.state.lock().unwrap().variables.get(id).cloned()
+                        .ok_or_else(|| CoreError::new("VARIABLE_MISSING", "状态变量不存在"))?;
+                }
+                check_message(&input)?;
+                match self.host.python_with_modules(text("code"),input,&project.code_modules,number("timeoutMs",5000),number("memoryMb",256),cancel).await? {
+                    Some(mut output) => {
+                        check_message(&output)?;
+                        if let Some(id) = state_id {
+                            let value = output.as_object_mut().unwrap().remove("state")
+                                .ok_or_else(|| CoreError::new("PYTHON_STATE", "代码块必须返回 state 状态"))?;
+                            if !project.variables.iter().find(|v|v.id == id).is_some_and(|v|v.accepts(&value)) {
+                                return Err(CoreError::new("VARIABLE_TYPE", "代码块返回状态类型无效"));
+                            }
+                            self.state.lock().unwrap().variables.insert(id.into(),value.clone());
+                            self.emit("variable.changed",Some(flow_id),Some(run_id),Some(&node.id),json!({"key":id,"value":value}));
+                        }
+                        *message = output;
+                    }
+                    None => return Ok(None),
+                }
+            }
             "page.navigate" => {
                 let current = self.project();
                 if std::ptr::eq(project, current.as_ref()) {
@@ -1399,6 +1531,15 @@ impl Runtime {
             _ => return Err(CoreError::new("NODE_KIND","不支持此节点类型")),
         }
         Ok(Some("out".into()))
+    }
+
+    fn variable_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.variable_locks
+            .lock()
+            .unwrap()
+            .entry(id.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 }
 
@@ -1422,6 +1563,21 @@ fn window_scope(message: &Value) -> &str {
         .and_then(|context| context.get("windowInstanceId"))
         .and_then(Value::as_str)
         .unwrap_or("")
+}
+
+fn flow_scope(flow: &Flow, message: &Value) -> CoreResult<String> {
+    if flow.scope.as_deref() != Some("device") {
+        return Ok(window_scope(message).to_owned());
+    }
+    let context = &message["context"];
+    let key = context["deviceKey"]
+        .as_str()
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| CoreError::new("DEVICE_SCOPE", "设备流程需要 deviceKey 上下文"))?;
+    Ok(format!(
+        "device:{}",
+        json!([context["transportId"], key, context["deviceGeneration"]])
+    ))
 }
 
 /// Context substitutions are single object keys, including dots or Windows path separators.

@@ -565,21 +565,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "demo-protocol"
-version = "1.0.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "hmi-core",
- "serde_json",
- "static_vcruntime",
- "tempfile",
- "tokio",
- "tokio-serial",
- "tokio-util",
-]
-
-[[package]]
 name = "deranged"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1296,9 +1281,10 @@ dependencies = [
 
 [[package]]
 name = "hmi-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
  "hmi-core",
@@ -1334,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-runner"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "hmi-desktop",
  "tauri",
@@ -1344,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "hmi-studio"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "hmi-desktop",
  "tauri",

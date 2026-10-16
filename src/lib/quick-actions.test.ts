@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { addQuickAction } from './quick-actions'
-import { demoProject } from './model'
+import { testProject } from '../../tests/fixtures/test-project'
 import { parseSchemaInput, schemaDefault, schemaDefaults, schemaType } from './schema'
 
 describe('schema configuration values', () => {
@@ -29,8 +29,8 @@ describe('schema configuration values', () => {
 
 describe('quick actions', () => {
   it('creates one trigger and action and replaces the event binding without duplicating execution', () => {
-    const project = demoProject(), button = project.pages[0]!.widgets.find(w => w.kind === 'button')!
-    const id = addQuickAction(project, button.id, { kind: 'connection.close', connectionId: 'sensor' })
+    const project = testProject(), button = project.pages[0]!.widgets.find(w => w.kind === 'button')!
+    const id = addQuickAction(project, button.id, { kind: 'connection.close', connectionId: 'connection-test' })
     const flow = project.flows.find(flow => flow.id === id)!
     expect(flow.nodes.map(node => node.kind)).toEqual(['trigger.ui', 'connection.close'])
     expect(flow.edges).toHaveLength(1)
@@ -38,9 +38,9 @@ describe('quick actions', () => {
     expect(Object.keys(button.events)).toEqual(['click'])
   })
   it('keeps command input references and rejects missing resources before mutation', () => {
-    const project = demoProject(), button = project.pages[0]!.widgets.find(w => w.kind === 'button')!
+    const project = testProject(), button = project.pages[0]!.widgets.find(w => w.kind === 'button')!
     const params = { target: { source: 'input' as const, key: 'target_input' } }
-    const id = addQuickAction(project, button.id, { kind: 'protocol.command', connectionId: 'sensor', command: 'setTarget', params })
+    const id = addQuickAction(project, button.id, { kind: 'protocol.command', connectionId: 'connection-test', command: 'write', params })
     expect(project.flows.find(flow => flow.id === id)!.nodes[1]!.config.params).toEqual(params)
     params.target.key = 'changed'
     expect(project.flows.find(flow => flow.id === id)!.nodes[1]!.config.params.target.key).toBe('target_input')

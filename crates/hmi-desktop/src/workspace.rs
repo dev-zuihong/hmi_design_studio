@@ -403,6 +403,9 @@ impl WorkspaceStore {
         saved: bool,
         backup_existing: bool,
     ) -> Result<WorkspaceState> {
+        if let Some(issue) = hmi_core::design_system::validate(&project).first() {
+            return Err(format!("{}: {}", issue.path, issue.message));
+        }
         if backup_existing && self.state(None).await.dirty {
             self.backup_recovery().await?;
         }
@@ -473,6 +476,7 @@ fn migrate_project(mut project: Project) -> (Project, bool) {
                 gap: None,
                 padding: None,
                 columns: None,
+                ..Default::default()
             });
             migrated = true;
         }
@@ -806,8 +810,11 @@ async fn apply_batch_guarded(
     }
     let project: Project =
         serde_json::from_value(candidate.clone()).map_err(|e| format!("项目结构无效: {e}"))?;
-    if ![1, 2, 3].contains(&project.schema_version) {
+    if ![1, 2, 3, 4].contains(&project.schema_version) {
         return Err("不支持此项目格式版本".into());
+    }
+    if let Some(issue) = hmi_core::design_system::validate(&project).first() {
+        return Err(format!("{}: {}", issue.path, issue.message));
     }
     inner.project = candidate;
     inner.revision += 1;
@@ -958,7 +965,7 @@ pub async fn replace_workspace(
 ) -> Result<WorkspaceState> {
     let project: Project =
         serde_json::from_value(project).map_err(|e| format!("项目结构无效: {e}"))?;
-    if ![1, 2, 3].contains(&project.schema_version) {
+    if ![1, 2, 3, 4].contains(&project.schema_version) {
         return Err("不支持此项目格式版本".into());
     }
     let path = path.map(PathBuf::from);
@@ -1303,14 +1310,14 @@ mod tests {
             (&shared, target, b"host-plugin".as_slice()),
             (&workspace, foreign_target, b"foreign-plugin".as_slice()),
         ] {
-            let path = root.join("plugins").join(platform).join("demo-protocol");
+            let path = root.join("plugins").join(platform).join("test-protocol");
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("plugin.bin"), content).unwrap();
         }
         let project: Project = serde_json::from_value(json!({
             "schemaVersion":1,"id":"p","name":"P","width":800,"height":600,
             "pages":[{"id":"page","name":"Page","widgets":[]}],
-            "connections":[{"id":"device","name":"Device","port":"COM1","baudRate":9600,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"demo-protocol"}]
+            "connections":[{"id":"device","name":"Device","port":"COM1","baudRate":9600,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"test-protocol"}]
         })).unwrap();
         assert!(stage_project_dependencies(&project, &workspace, &shared)
             .unwrap()
@@ -1324,7 +1331,7 @@ mod tests {
                 reopened
                     .join("plugins")
                     .join(target)
-                    .join("demo-protocol/plugin.bin")
+                    .join("test-protocol/plugin.bin")
             )
             .unwrap(),
             b"host-plugin"
@@ -1334,7 +1341,7 @@ mod tests {
                 reopened
                     .join("plugins")
                     .join(foreign_target)
-                    .join("demo-protocol/plugin.bin")
+                    .join("test-protocol/plugin.bin")
             )
             .unwrap(),
             b"foreign-plugin"

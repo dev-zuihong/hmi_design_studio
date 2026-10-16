@@ -39,7 +39,7 @@ fn edge(id: &str, from: &str, port: &str, to: &str) -> Value {
 fn project(nodes: Vec<Value>, edges: Vec<Value>) -> Project {
     serde_json::from_value(json!({"schemaVersion":1,"id":"project","name":"Tests","width":800,"height":600,
         "pages":[{"id":"page","name":"Page","widgets":[]}],
-        "connections":[{"id":"device","name":"Device","port":"sim://temperature","baudRate":115200,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"demo-temperature","protocolVersion":"1.0.0","protocolConfig":{}}],
+        "connections":[{"id":"device","name":"Device","port":"sim://temperature","baudRate":115200,"dataBits":8,"stopBits":1,"parity":"none","protocolId":"test-protocol","protocolVersion":"1.0.0","protocolConfig":{}}],
         "variables":[{"id":"value","name":"Value","type":"number","initial":0}],
         "flows":[{"id":"flow","name":"Flow","enabled":true,"timeoutMs":2000,"nodes":nodes,"edges":edges}]})).unwrap()
 }

@@ -2,7 +2,6 @@
 members = [
   "crates/hmi-core",
   "crates/hmi-python",
-  "crates/demo-protocol",
   "crates/hmi-desktop",
   "apps/studio/src-tauri",
   "apps/runner/src-tauri",
@@ -10,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 

@@ -90,6 +90,41 @@ impl RuntimeWindows {
                     || instance.context["backendId"]
                         .as_str()
                         .is_some_and(|id| !project.backends.iter().any(|backend| backend.id == id))
+                    || instance.context["transportId"].as_str().is_some_and(|id| {
+                        !project
+                            .transports
+                            .iter()
+                            .any(|transport| transport.id == id)
+                    })
+            })
+            .map(|(label, _)| label.clone())
+            .collect();
+        for label in stale {
+            self.remove(&label).await;
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.destroy();
+            }
+        }
+    }
+    pub async fn reconcile_transport(&self, app: &tauri::AppHandle, snapshot: &Value) {
+        let Some(id) = snapshot["transportId"].as_str() else {
+            return;
+        };
+        let stale: Vec<_> = self
+            .instances
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, instance)| {
+                instance.context["transportId"] == id
+                    && !snapshot["devices"].as_array().is_some_and(|devices| {
+                        devices.iter().any(|device| {
+                            device["deviceKey"] == instance.context["deviceKey"]
+                                && device["present"] == true
+                                && device["deviceGeneration"]
+                                    == instance.context["deviceGeneration"]
+                        })
+                    })
             })
             .map(|(label, _)| label.clone())
             .collect();
@@ -112,7 +147,13 @@ impl RuntimeWindows {
         if let Some(values) = args.get("context").and_then(Value::as_object) {
             next_context.extend(values.clone());
         }
-        for key in ["deviceKey", "backendId", "generation"] {
+        for key in [
+            "deviceKey",
+            "backendId",
+            "generation",
+            "transportId",
+            "deviceGeneration",
+        ] {
             if let Some(value) = args.get(key) {
                 next_context.insert(key.into(), value.clone());
             }
@@ -137,11 +178,13 @@ impl RuntimeWindows {
             .ok_or("窗口模板不存在")?;
         let key_field = template.instance_key.as_deref().unwrap_or("deviceKey");
         let instance_key = format!(
-            "{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}",
             id,
             next_context.get("backendId").unwrap_or(&Value::Null),
             next_context.get(key_field).unwrap_or(&Value::Null),
-            next_context.get("generation").unwrap_or(&Value::Null)
+            next_context.get("generation").unwrap_or(&Value::Null),
+            next_context.get("transportId").unwrap_or(&Value::Null),
+            next_context.get("deviceGeneration").unwrap_or(&Value::Null)
         );
         use sha2::{Digest, Sha256};
         let hash = format!("{:x}", Sha256::digest(instance_key.as_bytes()));

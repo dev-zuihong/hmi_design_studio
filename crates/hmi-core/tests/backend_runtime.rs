@@ -51,13 +51,13 @@ fn project(nodes: Vec<Value>) -> Project {
     let edges: Vec<_> = nodes.windows(2).enumerate().map(|(index,pair)| json!({"id":format!("edge{index}"),"source":pair[0]["id"],"target":pair[1]["id"],"sourcePort":"out","targetPort":"in"})).collect();
     serde_json::from_value(json!({"schemaVersion":3,"id":"backend-test","name":"Backend tests","width":800,"height":600,
         "pages":[{"id":"main","name":"Main","widgets":[{"id":"field","kind":"input","name":"Field","x":0,"y":0,"width":100,"height":30,"zIndex":0,"props":{"value":"default"}}]}],
-        "backends":[{"id":"ptb","name":"PTB","providerId":"ing-ptb","providerVersion":"1.0.0","mode":"simulation","config":{}}],
+        "backends":[{"id":"test-backend","name":"PTB","providerId":"test-provider","providerVersion":"1.0.0","mode":"simulation","config":{}}],
         "windows":[{"id":"settings","pageId":"main","title":"Settings","width":800,"height":600}],
         "flows":[{"id":"flow","name":"Flow","enabled":true,"timeoutMs":5000,"nodes":nodes,"edges":edges}]})).unwrap()
 }
 fn snapshot(generation: u64, sequence: u64, value: &str) -> BackendEvent {
     BackendEvent {
-        backend_id: "ptb".into(),
+        backend_id: "test-backend".into(),
         kind: "snapshot".into(),
         generation,
         sequence,
@@ -142,8 +142,8 @@ async fn backend_nodes_resolve_contextual_state_and_keep_context_for_following_n
         node(
             "invoke",
             "backend.invoke",
-            json!({"backendId":"ptb","operation":"start","args":{
-        "value":{"source":"backend","key":"ptb","path":"byDevice.$deviceKey.value"},"deviceKey":{"source":"context","path":"deviceKey"}}}),
+            json!({"backendId":"test-backend","operation":"start","args":{
+        "value":{"source":"backend","key":"test-backend","path":"byDevice.$deviceKey.value"},"deviceKey":{"source":"context","path":"deviceKey"}}}),
         ),
         node(
             "write",
@@ -181,12 +181,12 @@ async fn backend_triggers_ignore_reordered_and_retired_generations() {
         node(
             "event",
             "trigger.backend",
-            json!({"backendId":"ptb","event":"snapshot"}),
+            json!({"backendId":"test-backend","event":"snapshot"}),
         ),
         node(
             "invoke",
             "backend.invoke",
-            json!({"backendId":"ptb","operation":"observe","args":{}}),
+            json!({"backendId":"test-backend","operation":"observe","args":{}}),
         ),
     ]);
     let runtime = Runtime::new(project, host.clone()).unwrap();
@@ -198,10 +198,10 @@ async fn backend_triggers_ignore_reordered_and_retired_generations() {
     runtime.wait_for_runs().await;
     assert_eq!(host.calls.lock().unwrap().len(), 1);
     assert_eq!(
-        runtime.snapshot().await.backends["ptb"]["byDevice"]["USB.path\\device"]["value"],
+        runtime.snapshot().await.backends["test-backend"]["byDevice"]["USB.path\\device"]["value"],
         json!("new")
     );
-    runtime.reset_backend("ptb");
+    runtime.reset_backend("test-backend");
     runtime.update_backend(snapshot(11, 0, "replacement"));
     runtime.wait_for_runs().await;
     assert_eq!(host.calls.lock().unwrap().len(), 2);
@@ -228,21 +228,20 @@ fn schema_three_rejects_unknown_backends_and_invalid_window_bounds() {
 }
 
 #[test]
-fn editable_ptb_example_has_valid_widgets_flows_and_references() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/ing-ptb/project.json");
-    let project: Project = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+fn blank_default_project_has_valid_schema_and_no_preloaded_behavior() {
+    let project: Project =
+        serde_json::from_str(include_str!("../../../resources/default/project.json")).unwrap();
     let errors: Vec<_> = hmi_core::validate_project(&project)
         .into_iter()
         .filter(|issue| issue.severity == "error")
         .collect();
     assert!(errors.is_empty(), "{errors:#?}");
-    assert_eq!(project.windows.len(), 1);
+    assert_eq!(project.schema_version, 4);
+    assert_eq!(project.pages.len(), 1);
+    assert!(project.pages[0].widgets.is_empty());
+    assert!(project.flows.is_empty());
     assert!(project.connections.is_empty());
-    assert!(project.python.is_none());
-    assert!(project
-        .pages
-        .iter()
-        .flat_map(|page| &page.widgets)
-        .any(|widget| widget.kind == "byte-range"));
+    assert!(project.variables.is_empty());
+    assert!(project.backends.is_empty());
+    assert!(project.code_modules.is_empty());
 }

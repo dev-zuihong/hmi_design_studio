@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ArrowLeft, MonitorPlay, SquareStop } from 'lucide-vue-next'
-import FButton from './fluent/FButton.vue'
+import BaseButton from './base/BaseButton.vue'
 import RuntimeView from './RuntimeView.vue'
 import type { Project } from '../lib/model'
 import { call, type Runtime } from '../lib/backend'
 import { projectLocale, t } from '../lib/i18n'
 
-const props = defineProps<{ project: Project; runtime: Runtime; pending: boolean }>()
-const emit = defineEmits<{ close: []; error: [message: string] }>()
+const props = defineProps<{ project: Project; runtime: Runtime; pending: boolean; error?: string }>()
+const emit = defineEmits<{ close: []; error: [message: string]; retry: [] }>()
 function languageChanged(event:Event) { const locale=(event.target as HTMLSelectElement).value; projectLocale.value=locale; void call('set_preview_locale',{locale,expectedGeneration:props.runtime.generation.value}).catch(reason=>emit('error',String(reason))) }
 const page = computed(() => props.project.pages.find(page => page.id === props.runtime.currentPage.value) ?? props.project.pages[0])
 const busy = computed(() => props.pending || props.runtime.busy.value)
@@ -16,8 +16,8 @@ const busy = computed(() => props.pending || props.runtime.busy.value)
 
 <template>
   <section class="preview-screen" aria-label="运行预览">
-    <header class="preview-header">
-      <FButton appearance="subtle" :disabled="busy" title="停止预览并返回编辑器" @click="$emit('close')"><ArrowLeft :size="16" />返回编辑器</FButton>
+    <header v-if="project.presentation?.chrome !== 'project'" class="preview-header">
+      <BaseButton appearance="subtle" :disabled="busy" title="停止预览并返回编辑器" @click="$emit('close')"><ArrowLeft :size="16" />返回编辑器</BaseButton>
       <span class="header-divider" />
       <MonitorPlay class="preview-symbol" :size="20" />
       <div class="preview-project"><h1>{{ project.name }}</h1><span>运行预览</span></div>
@@ -26,10 +26,10 @@ const busy = computed(() => props.pending || props.runtime.busy.value)
       <select v-if="project.i18n?.locales.length" class="preview-language" :value="projectLocale" :aria-label="t('预览语言')" @change="languageChanged"><option v-for="locale in project.i18n.locales" :key="locale" :value="locale">{{ locale }}</option></select>
       <span class="preview-page-name">{{ page?.name }}</span>
       <span class="preview-dimensions">{{ project.width }} × {{ project.height }}</span>
-      <FButton :disabled="busy" @click="$emit('close')"><SquareStop :size="16" />停止预览</FButton>
+      <BaseButton :disabled="busy" @click="$emit('close')"><SquareStop :size="16" />停止预览</BaseButton>
     </header>
-    <RuntimeView :project="project" :runtime="runtime" @error="$emit('error', $event)" />
-    <footer class="preview-footer"><span>关闭预览窗口时将停止运行并关闭本次会话的连接</span><span>{{ project.pages.length }} 个页面 · {{ project.flows.length }} 个流程</span></footer>
+    <RuntimeView :project="project" :runtime="runtime" :error="error" @error="$emit('error', $event)" @retry="$emit('retry')" />
+    <footer v-if="project.presentation?.chrome !== 'project'" class="preview-footer"><span>关闭预览窗口时将停止运行并关闭本次会话的连接</span><span>{{ project.pages.length }} 个页面 · {{ project.flows.length }} 个流程</span></footer>
   </section>
 </template>
 
