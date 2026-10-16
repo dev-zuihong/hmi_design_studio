@@ -18,6 +18,8 @@ npm run desktop
 
 `npm run dev` 只启动浏览器编辑器，可编辑、保存完整 `.hmiproj` 工程包和校验结构；串口、Python、实际流程执行和独立程序导出需要桌面应用。所有模拟连接明确使用 `sim://temperature`。
 
+使用 pnpm 时，在仓库根目录执行 `pnpm install` 安装依赖，再执行 `pnpm tauri dev` 启动设计器，也可使用 `pnpm desktop`。设备预览和导出所需的本地运行资源按上述步骤准备。根目录的 `tauri` 脚本明确进入 `apps/studio`，避免多应用仓库的 CLI 自动发现选中 `apps/runner`。`pnpm exec tauri dev` 会绕过该脚本；需要直接调用 CLI 时，先进入 `apps/studio`。
+
 ## 设计与运行
 
 1. 打开示例、旧 JSON 或 `.hmiproj`，也可新建工程。将组件拖到画布释放定位，或点击组件库后再点击画布放置；Esc 取消。右键提供复制、层级、对齐、布局和绑定操作。

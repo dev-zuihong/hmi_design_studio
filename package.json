@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "tauri": "cd apps/studio && tauri",
     "desktop": "cd apps/studio && tauri dev",
     "check": "vue-tsc --noEmit",
     "test": "vitest run src",

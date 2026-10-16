@@ -210,3 +210,16 @@
 - **影响范围**：核心 Runtime/ConnectionManager、Session、桌面 IPC、Runner 启动、双窗运行控制、共享渲染、资源快照及跨平台构建。
 - **验证结果**：前端单测 35 项、Rust workspace 68 项通过，2 项默认忽略的含义见验证记录；Windows x64 desktop 库跨目标编译通过。最终 macOS 原生专项验证 Studio PID 42848 与 Runner PID 42909 不同、实际控件读取 23.6°C、旧/新运行序号与候选合并、PID 保持、无效候选拒绝及主窗关闭清理；另外 PID 42949 在已打开连接后主动断开 IPC，自动收尾退出。报告为 `artifacts/native-preview-window-arm64-20261016-045036.json`。普通生产构建、完整工程包互通和按包内资源执行的独立导出均通过；最终产物与实际命令见 [VERIFICATION.md](VERIFICATION.md)。
 - **未完成事项**：Windows 0.2.0 原生运行、Intel Mac、macOS 14 最低系统、干净机器、真实串口、长期/DPI 与 Developer ID 签名/公证仍需相应环境；直接替换缓存字节不会触发热更新，协议插件替换后需重新打开预览。仓库仍无 Git 姓名和邮箱，按协作规则不编造身份，所有变更与日志保留在工作区/暂存区，暂未提交。
+## CHG-0013 — 修复根目录 pnpm tauri dev 启动错误应用
+
+- **时间**：2026-10-16 10:41:03 +08:00（北京时间）。
+- **类型**：开发启动入口修复。
+- **方案版本**：v0.8，产品范围与运行接口保持不变。
+- **修改内容**：在 package.json 增加 `tauri` 脚本，明确进入 `apps/studio` 后调用 CLI，使根目录的 `pnpm tauri dev` 启动设计器；在 README 补充 pnpm 用法及 `pnpm exec` 绕过脚本的区别。
+- **修改原因**：根目录缺少同名脚本时，pnpm 直接调用 Tauri CLI；CLI 在多应用仓库中自动发现了 `apps/runner/src-tauri`，实际启动 hmi-runner，未启动设计器及其 Vite 服务。
+- **影响范围**：根目录开发命令及使用说明；不修改依赖或 Rust/Vue 应用逻辑。保留已有 desktop 入口与用户未提交的 pnpm-lock.yaml 修改。
+- **验证结果**：
+  - 修改前实际执行 `pnpm tauri dev`，日志确认监听 apps/runner/src-tauri 并运行 target/debug/hmi-runner.exe；修改后同一命令启动 Vite、监听 apps/studio/src-tauri，并成功编译运行 hmi-studio.exe。
+  - 通过本机真实 WebView2 调试连接确认窗口响应正常，标题为 HMI Design Studio；页面标题为 HMI Studio · 界面设计，桌面 IPC 返回 mode=studio、version=0.2.0，画布及 35 项组件可见。报告与截图保存于 artifacts/pnpm-tauri-dev-report.json 和 artifacts/pnpm-tauri-dev-studio.png，调试端口仅在本次测试子进程环境中启用。
+  - 已停止本次复现与验证进程；已有 pnpm-lock.yaml SHA-256 保持不变。文档 UTF-8、相对链接、历史日志前缀、git diff --check 与 git diff --cached --check 通过。
+- **未完成事项**：本次只验证 Windows 开发启动路径；未重跑完整产品回归或 macOS 原生启动。构建保留既有未使用代码警告，不影响设计器启动。
