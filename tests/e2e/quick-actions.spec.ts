@@ -30,6 +30,7 @@ test('serial panel drops at the pointer location and binds both connection butto
   const scale = box.width / 1280
   await page.locator('.serial-library-item').dragTo(board, { targetPosition: { x: 160, y: 150 } })
   await expect(page.locator('.design-widget')).toHaveCount(count + 3)
+  await expect(page.locator('.connections-content')).toBeVisible()
   const project = await savedProject(page), widgets = project.pages[0].widgets.slice(-3)
   expect(widgets.map((widget: any) => widget.kind)).toEqual(['group', 'button', 'button'])
   expect(widgets[0].x).toBeCloseTo(Math.round(Math.max(0,160 / scale - 180) / 8) * 8, 0)
@@ -41,11 +42,13 @@ test('serial panel drops at the pointer location and binds both connection butto
 test('plugin configuration editor preserves boolean, enum, object and array types', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
+  await page.locator('.resource-tabs').getByRole('button', { name: /设备连接/ }).click()
   await page.evaluate(async () => {
     const modulePath = performance.getEntriesByType('resource').map(entry=>entry.name).find(name=>name.includes('/src/lib/resources.ts')) ?? '/src/lib/resources.ts'
     const { pluginCatalog } = await import(/* @vite-ignore */ modulePath)
     pluginCatalog.value[0].configSchema = { type: 'object', properties: { enabled: { type: 'boolean', title: '设备启用' }, mode: { type: 'string', title: '模式', enum: ['fast', 'slow'] }, options: { type: 'object', title: '设备选项' }, channels: { type: 'array', title: '通道列表' } } }
   })
+  await page.locator('.protocol-parameters > summary').click()
   await page.getByLabel('设备启用', { exact: true }).selectOption('true')
   await page.getByLabel('模式', { exact: true }).selectOption('"fast"')
   await page.getByLabel('设备选项', { exact: true }).fill('{"address": 3}')

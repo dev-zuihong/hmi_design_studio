@@ -107,7 +107,7 @@ for (const [platform, label] of [
   test(`get_environment maps ${platform} to its platform label`, async ({ page }) => {
     await installDesktopMock(page, { platform })
     await page.goto('/')
-    await expect(page.locator('.project-platform')).toHaveText(label)
+    await page.getByRole('button', { name: '工作区设置', exact: true }).click()
     await page.getByRole('button', { name: '使用帮助' }).click()
     await expect(page.getByRole('dialog', { name: '开始使用' })).toContainText(`${label} 程序`)
   })
@@ -116,7 +116,10 @@ for (const [platform, label] of [
 test('new Python example stores the native runtime ID from get_environment', async ({ page }) => {
   await installDesktopMock(page, { platform: 'macos-arm64' })
   await page.goto('/')
-  await expect(page.locator('.project-platform')).toHaveText('macOS Apple Silicon')
+  await page.getByRole('button', { name: '工作区设置', exact: true }).click()
+  await page.getByRole('button', { name: '使用帮助' }).click()
+  await expect(page.getByRole('dialog', { name: '开始使用' })).toContainText('macOS Apple Silicon 程序')
+  await page.getByTitle('关闭帮助', { exact: true }).click()
   await page.getByRole('button', { name: '文件', exact: true }).click()
   await page.getByRole('button', { name: '添加 Python 示例流程', exact: true }).click()
   const saved = await saveAndReadProject(page)

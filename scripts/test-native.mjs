@@ -37,7 +37,7 @@ try {
     await page.locator('.preview-screen').waitFor()
     assert.match(page.url(), /view=preview/)
     assert.equal(await mainPage.locator('.studio-shell').isVisible(), true)
-    assert.equal(await mainPage.locator('.command-bar').isVisible(), true)
+    assert.equal(await mainPage.locator('.studio-toolbar').isVisible(), true)
     assert.equal(await mainPage.locator('.resources-panel').isVisible(), true)
     assert.equal(context.pages().length, 2)
   }
@@ -50,7 +50,7 @@ try {
     assert.equal(context.pages().length, 1)
   }
   if (mode === 'studio') {
-    await mainPage.getByText('桌面工作区', { exact: true }).waitFor()
+    await mainPage.locator('.dock-status[title="桌面工作区"]').waitFor()
     await openPreviewWindow()
   } else {
     await page.locator('.runner-header .status-pill').filter({ hasText: '运行中' }).waitFor({ timeout: 30000 })

@@ -260,3 +260,43 @@ WebKit 曾在保存后的资源缺失提示改变画布尺寸时报告两处 Res
 ### 未覆盖环境
 
 本轮未执行 Windows 0.2.0 原生应用、Intel Mac、macOS 14 最低系统、干净机器、真实串口、长期运行和不同 DPI 验收；本机模拟及跨目标编译不能代替这些目标环境。应用仍使用本机 ad-hoc 签名，未做 Developer ID 签名或公证。直接替换缓存文件不触发热更新；依赖更新须经过导入及工程摘要/锁变更，协议插件替换后需重新打开预览。
+
+## CHG-0014：紧凑工作区布局验证（2026-10-16）
+
+本轮仅修改编辑器布局、交互与对应前端测试，方案升至 v0.9，应用仍为 0.2.0。Windows 本机使用现有依赖与 Vite 服务，未修改用户已有的 `pnpm-lock.yaml`。
+
+### 尺寸与操作
+
+| 项目（1366×768 默认布局） | 调整前 | 调整后 | 用途 |
+| --- | --- | --- | --- |
+| 顶部栏总高 | 141px | 48px | 项目和全局命令集中到一行 |
+| 画布上下文栏与标尺 | 63px | 54px | 保留对象操作及定位入口 |
+| 底栏、分隔条与状态栏 | 251px | 32px | 默认收起，按标签展开资源 |
+| 画布可滚动高度 | 313px | 634px | 增加 321px，超过 150px 验收目标 |
+
+真实 Chromium 页面覆盖 1920×1080、1366×768、800×600，zh-CN/en-US，主窗/逻辑窗共 12 个布局组合；均无整页或顶部工具栏横向溢出，最窄窗口中央工作区宽度为 320px。实际拖动到左 400px、右 500px、底 400px 后缩至 800×600，有效尺寸变为 180/300/270px，画布可滚动区域仍至少 180px 高；恢复大窗或重新打开后保留首选尺寸。
+
+自动检查还确认：主/逻辑窗分开保存偏好；恢复默认布局不改变工程内容、未保存状态或撤销历史；菜单动作后焦点返回触发按钮；搜索展开命中分组且清空恢复折叠；布局托管、多选、常用文案、Python 参数、协议参数类型、只读限制、变量搜索、日志筛选和错误计数保留。预览热更新、运行时控件和共享布局使用既有回归检查。
+
+测量与截图保存于忽略目录：`artifacts/layout-before.json`、`artifacts/layout-before-1366.png`、`artifacts/layout-after-zh-CN.json`、`artifacts/layout-after-en-US.json`、`artifacts/layout-{main|logic}-{locale}-{width}.png`。
+
+### 实际执行结果
+
+| 检查 | 结果 |
+| --- | --- |
+| `pnpm check` | Vue/TypeScript 检查通过 |
+| `pnpm test` | 51 项单元测试通过，包括 14 项布局偏好及 2 项搜索测试；覆盖页面立即刷新/关闭时同步保存偏好与拖拽收尾 |
+| `pnpm build` | Studio 与 Runner 生产前端构建通过；保留 Studio 单个 JS chunk 超过 500 kB 的体积提示 |
+| `pnpm exec playwright test --workers=3 --output=artifacts/layout-final-results` | 当时完整 Chromium 集合 47 项通过，含拖放、保存重开、双窗冲突、热更新、组件运行及新增面板交互 |
+| `pnpm exec playwright test tests/e2e/designer-layout.spec.ts --workers=2 --output=artifacts/layout-matrix-results` | 6 项通过；在前述集合基础上增加 2 项中英文尺寸矩阵测试，并复验布局/焦点。当前共 49 个不同交互用例均有通过结果 |
+| 资源展开专项（`--grep 'serial panel\|validation and preview\|editor stays editable'`） | 3 项通过：拖入串口展开设备、主动校验失败展开检查、后台热更新失败保持底栏收起 |
+| 实际 `pnpm tauri dev` + WebView2 调试验证 | Windows x64 Studio 0.2.0 启动通过，原生主窗/逻辑窗均为 48px 工具栏、32px 底栏；侧栏操作保持分窗独立，工程内容与修订号不变，无页面未处理异常 |
+| 文档、日志及 Git 检查 | UTF-8、文档相对链接、历史日志前缀、CHG 编号唯一性、`git diff --check` 与新增文件暂存后的 `git diff --cached --check` 通过 |
+
+首轮交互回归曾有 8 项失败：旧语言/平台/状态栏入口定位、协议字段展开时序、原生 select 名称定位，以及按钮文案被折入行为组。已同步测试入口并将常用文案放回默认展开的内容组，随后上述最终回归通过；失败不计作通过结果。
+
+原生验证先等待已有 Studio/Vite 会话退出，随后在独立测试子进程环境启用 WebView2 调试端口 9335 并实际执行 `pnpm tauri dev`。验证完成后恢复测试前 localStorage 布局/语言值，停止本次启动的进程树；未替换或编辑恢复的工程，未启动设备或预览。报告与截图为 `artifacts/layout-native-report.json`、`artifacts/layout-native-main.png`、`artifacts/layout-native-logic.png`，启动输出为 `artifacts/layout-native-dev.log`。日志保留既有 Rust 未使用代码警告及 Tauri 自定义 IPC 协议回退到 postMessage 的提示；环境读取、工作区读取与逻辑窗打开均实际成功。初始连接预览状态时出现“预览 host 未运行”通知，本轮未修改该运行连接行为，也未以布局验证代替预览执行验证。
+
+### 未覆盖范围
+
+本轮原生检查限定为开发启动、双窗布局和偏好/工程隔离，不代替原生设备、Python 或 Runner 执行验收。`scripts/test-native.mjs` 仅同步了布局定位，未重新运行其完整设备测试。Rust、Python 执行核心未修改，本轮未重跑其测试；WebKit、真实串口、Windows 10、不同 DPI、干净机器和其他平台验收仍待相应环境。早期针对既有进程的只读窗口截图未取得有效画面，不计作验证；最终原生结果来自上述独立启动。

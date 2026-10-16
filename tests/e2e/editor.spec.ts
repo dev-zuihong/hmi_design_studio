@@ -5,7 +5,7 @@ test('designer adds, edits, duplicates, undoes and reloads a saved project', asy
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
-  await expect(page.getByText('浏览器设计模式', { exact: true })).toBeVisible()
+  await expect(page.locator('.dock-status')).toHaveAttribute('title', '浏览器设计模式')
   expect(await page.evaluate(() => ['fluent-button','fluent-text-input','fluent-switch','fluent-dropdown'].every(tag => !!customElements.get(tag)))).toBe(true)
   const widgets = page.locator('.design-widget')
   const count = await widgets.count()

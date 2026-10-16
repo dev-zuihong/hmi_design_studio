@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Moveable from 'vue3-moveable'
 import { VueSelecto } from 'vue3-selecto'
-import { Minus, Plus, Maximize } from 'lucide-vue-next'
+import { Minus, Plus, Maximize, Copy, Trash2, ChevronDown } from 'lucide-vue-next'
 import DesignWidget from './DesignWidget.vue'
 import ContextMenu from './ContextMenu.vue'
 import type { Editor } from '../lib/editor'
@@ -22,6 +22,13 @@ const horizontalTicks=computed(()=>Array.from({length:Math.ceil(props.editor.pro
 const verticalTicks=computed(()=>Array.from({length:Math.ceil(props.editor.project.value.height/rulerStep.value)+1},(_,index)=>({label:index*rulerStep.value,position:viewportOrigin.value.y+index*rulerStep.value*zoom.value})).filter(tick=>tick.position>=0&&tick.position<viewportOrigin.value.height))
 function updateViewport(){if(!board.value||!scroller.value||!host.value)return;const root=host.value.getBoundingClientRect(),area=scroller.value.getBoundingClientRect(),rect=board.value.getBoundingClientRect();viewportOrigin.value={x:rect.left-root.left,y:rect.top-area.top,width:area.width,height:area.height,top:area.top-root.top}}
 const rootWidgets=computed(()=>getRootWidgets(props.editor.page.value)),guides=computed(()=>props.editor.page.value.guides??[])
+const selectionLabel=computed(()=>props.editor.selectedWidgets.value.length>1?`${props.editor.selectedWidgets.value.length} ${t('个控件')}`:props.editor.selectedWidgets.value[0]?.name??props.editor.page.value.name)
+function toolbarMenu(event:MouseEvent,kind:'align'|'layout'){
+ const rect=(event.currentTarget as HTMLElement).getBoundingClientRect(),selected=props.editor.selectedWidgets.value
+ const parent=selected.length===1&&isContainer(selected[0]!)?selected[0]:undefined
+ const items:MenuItem[]=kind==='align'?([['left','左对齐'],['right','右对齐'],['center','水平居中'],['top','顶端对齐'],['bottom','底端对齐'],['middle','垂直居中'],['horizontal','水平等距'],['vertical','垂直等距'],['width','等宽'],['height','等高']]as const).map(([direction,label])=>({label,disabled:(direction==='horizontal'||direction==='vertical')&&selected.length<3,action:()=>props.editor.align(direction)})):([['absolute','解除布局'],['horizontal','水平布局'],['vertical','垂直布局'],['grid','网格布局'],['form','表单布局']]as const).map(([type,label])=>({label,action:()=>setLayout(type,parent?.id)}))
+ menu.value={x:rect.left,y:rect.bottom+3,items}
+}
 const elementGuidelines=computed(()=>board.value?[...board.value.querySelectorAll<HTMLElement>('.design-widget')].filter(element=>!targets.value.includes(element)):[])
 async function refreshTargets(){await nextTick();const next=props.editor.selected.value.map(id=>board.value?.querySelector<HTMLElement>(`[data-widget-id="${id}"]`)).filter((el):el is HTMLElement=>!!el);if(next.length!==targets.value.length||next.some((target,index)=>target!==targets.value[index]))targets.value=next;await nextTick()}
 watch(()=>[props.editor.selected.value.join(','),props.editor.pageId.value,props.editor.page.value.widgets.map(widget=>widget.id).join(',')],refreshTargets)
@@ -81,7 +88,14 @@ defineExpose({fit,setZoom,paste,copy,openContext:context})
 </script>
 <template>
  <div ref="host" class="canvas-workspace" @wheel="wheel" @dragover="dragOver" @drop="drop" @mousedown.capture="panStart">
-  <div class="canvas-document-caption"><span data-project-text>{{ editor.page.value.name }}</span><span>{{ editor.project.value.width }} × {{ editor.project.value.height }}</span><span v-if="placement" class="placement-hint">{{ t('点击画布放置，Esc 取消') }}</span></div>
+  <div class="canvas-document-caption" :aria-label="t('画布操作')" @wheel.stop>
+   <span class="canvas-selection-label" data-project-text :title="selectionLabel">{{ selectionLabel }}</span>
+   <span v-if="placement" class="placement-hint" :title="t('点击画布放置，Esc 取消')">{{ t('放置中') }}</span>
+   <button class="icon-button" title="复制控件 (Ctrl+D)" :disabled="!editor.selected.value.length" @click="editor.duplicateSelected"><Copy :size="14"/></button>
+   <button class="icon-button" title="删除控件 (Delete)" :disabled="!editor.selected.value.length||editor.selectedWidgets.value.some(widget=>widget.editor?.locked)" @click="editor.removeSelected"><Trash2 :size="14"/></button>
+   <button class="canvas-tool" :disabled="editor.selectedWidgets.value.length<2" @click="toolbarMenu($event,'align')">{{ t('对齐') }}<ChevronDown :size="11"/></button>
+   <button class="canvas-tool" :disabled="editor.selectedWidgets.value.length>0&&!(editor.selectedWidgets.value.length===1&&isContainer(editor.selectedWidgets.value[0]!))" :title="t(editor.selectedWidgets.value.length?'容器布局':'页面布局')" @click="toolbarMenu($event,'layout')">{{ t('布局') }}<ChevronDown :size="11"/></button>
+  </div>
   <div v-if="rulers" class="canvas-rulers"><div class="ruler-horizontal" title="拖出水平辅助线" :style="{backgroundSize:`${rulerStep*zoom/10}px 100%`,backgroundPositionX:`${viewportOrigin.x}px`}" @pointerdown="guideStart($event,'horizontal')"><span v-for="tick in horizontalTicks" :key="tick.label" :style="{left:`${tick.position}px`}">{{ tick.label }}</span></div></div><div v-if="rulers" class="ruler-vertical" title="拖出垂直辅助线" :style="{top:`${viewportOrigin.top}px`,height:`${viewportOrigin.height}px`}" @pointerdown="guideStart($event,'vertical')"><span v-for="tick in verticalTicks" :key="tick.label" :style="{top:`${tick.position}px`}">{{tick.label}}</span></div>
   <div ref="scroller" class="canvas-scroll" tabindex="0" @scroll="updateViewport" @contextmenu.self.prevent="context($event)" @click="click" @mousemove="event=>{if(placement&&!panning)locate(event,placement)}"><div class="canvas-spacer" :style="{width:`${editor.project.value.width*zoom}px`,height:`${editor.project.value.height*zoom}px`}"><div ref="board" class="design-board" :class="{'placing-widget':placement||dragKind}" :style="{...layoutStyle(editor.page.value.layout),width:`${editor.project.value.width}px`,height:`${editor.project.value.height}px`,transform:`scale(${zoom})`}" @contextmenu.prevent="context($event)">
    <DesignWidget v-for="widget in rootWidgets" :key="widget.id" :editor="editor" :widget="widget" @select="select" @context="context"/>
@@ -97,5 +111,8 @@ defineExpose({fit,setZoom,paste,copy,openContext:context})
  </div>
 </template>
 <style scoped>
+.canvas-document-caption{height:34px;min-height:34px;padding:0 8px;gap:3px;background:#f8f9fb;border-bottom:1px solid #e0e5eb;color:#607084;font-size:11px}
+.canvas-selection-label{min-width:24px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1;padding-right:5px}
+.canvas-document-caption .icon-button{height:26px;width:26px}.canvas-tool{display:flex;align-items:center;gap:3px;white-space:nowrap;height:26px;border-radius:4px;padding:0 6px;font-size:11px}.canvas-tool:hover:not(:disabled){background:#e9eef4}
 .canvas-scroll{display:block;padding:40px;scrollbar-gutter:stable;overscroll-behavior:contain;min-width:0}.canvas-spacer{margin:auto;min-width:0}.design-board{position:relative;transform-origin:top left}.canvas-empty{pointer-events:none}.placement-ghost{position:absolute;border:2px dashed #0f6cbd;background:#0f6cbd20;pointer-events:none;z-index:9999}.placement-ghost span{position:absolute;top:-24px;background:#0f6cbd;color:white;padding:2px 6px;font-size:12px;white-space:nowrap}.managed-ghost{border-color:#28935f;background:#28935f22}.placing-widget{cursor:crosshair}.canvas-rulers{height:20px;flex-shrink:0;background:#f8fafc;display:flex;position:relative;border-bottom:1px solid #d8dfe8}.ruler-horizontal{display:flex;justify-content:space-between;flex:1;font-size:9px;color:#788695;cursor:row-resize;background:repeating-linear-gradient(90deg,transparent 0 9px,#cbd3dc 9px 10px)}.ruler-horizontal span{background:#f8fafc}.ruler-vertical{position:absolute;left:0;top:20px;height:100px;cursor:col-resize}.design-guide{position:absolute;z-index:1000;background:#e957a5;opacity:.8}.design-guide.horizontal{height:1px;left:0;right:0;cursor:row-resize}.design-guide.vertical{width:1px;top:0;bottom:0;cursor:col-resize}.design-guide:before{content:'';position:absolute;inset:-4px}.placement-hint{color:#0f6cbd;font-size:11px;margin-left:auto}
 .ruler-horizontal{position:relative;overflow:hidden;background-repeat:repeat-x}.ruler-horizontal span{position:absolute;top:0;line-height:15px;font-size:9px}.ruler-vertical{position:absolute;left:0;width:20px;z-index:5;overflow:hidden;background:#f7f9fcdd;border-right:1px solid #d8dfe8;cursor:col-resize}.ruler-vertical span{position:absolute;left:0;writing-mode:vertical-rl;font-size:9px;color:#788695;transform:translateY(-50%)}.guide-coordinate{position:absolute;top:-16px;left:0;padding:0 3px;background:#fff;color:#b13e81;font-size:10px;pointer-events:none}.guide-draft{pointer-events:none;opacity:1}.guide-position-editor{position:absolute;right:15px;top:60px;z-index:80;background:#fff;padding:12px;border:1px solid #d6dce5;border-radius:6px;box-shadow:0 5px 20px #0002;display:flex;gap:7px;align-items:end}.guide-position-editor label{margin:0;width:120px}.guide-position-editor button{padding:7px;border:1px solid #d6dce5;border-radius:4px}</style>

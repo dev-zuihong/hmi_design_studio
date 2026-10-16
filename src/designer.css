@@ -1,0 +1,32 @@
+/* Editor chrome only: runtime widgets and Runner retain their existing sizing. */
+.studio-shell .studio-workspace{min-height:160px;grid-template-columns:var(--library-width,220px) minmax(0,1fr) var(--inspector-width,300px)}
+.studio-shell .studio-workspace.left-collapsed>.library,.studio-shell .studio-workspace.right-collapsed>.inspector{display:none}
+.studio-shell .library-tabs{height:34px;padding:0 12px;gap:20px}
+.studio-shell .library-search{margin:8px 10px;flex-shrink:0}
+.studio-shell .library-search input{height:28px;font-size:12px}
+.studio-shell .library-search>svg{top:7px}
+.studio-shell .library-content{padding-bottom:8px}
+.studio-shell .library-section-heading{padding:8px 12px 5px;color:#6a7686;font-size:11px;letter-spacing:0}
+.studio-shell .library-group-toggle{display:flex;align-items:center;gap:5px;width:100%;text-align:left;min-height:28px}
+.studio-shell .library-group-toggle:hover{background:#f5f7fa}
+.studio-shell .library-group-toggle svg.folded{transform:rotate(-90deg)}
+.studio-shell .widget-library{display:flex;flex-direction:column;gap:1px;padding:0 7px}
+.studio-shell .widget-library-item{height:30px;min-height:30px;flex-direction:row;justify-content:flex-start;padding:0 9px;gap:9px;border:1px solid transparent;border-radius:4px;font-size:12px}
+.studio-shell .widget-library-item:hover{background:#eef4fb;border-color:#dce9f6}
+.studio-shell .serial-library-item{margin:0 7px;min-height:30px;padding:5px 9px;font-size:12px;border-color:transparent;background:transparent}
+.studio-shell .serial-library-item:hover{background:#eef4fb}
+.studio-shell .pages-panel{padding:4px 7px 7px;min-height:66px;max-height:25%}
+.studio-shell .pages-panel .panel-title{height:28px;padding:0 4px;font-size:11px}
+.studio-shell .pages-panel .page-item>button{padding:6px 8px;min-height:30px}
+.studio-shell .palette-empty{padding:14px;color:#7c8795;font-size:12px}
+.studio-shell .dock-status{display:flex;align-items:center;gap:12px;min-width:0;overflow:hidden;font-size:11px;color:#6a7889}
+.studio-shell .dock-status>span{white-space:nowrap}
+.studio-shell .dock-filename{max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.studio-shell .status-ready{display:flex;align-items:center;gap:6px}
+.studio-shell .status-ready i{width:6px;height:6px;border-radius:50%;background:#91a0ae}
+.studio-shell .status-ready i.running{background:#30915f}
+.studio-shell .missing-resource-notice{font-size:11px;padding:5px 12px;max-height:52px;overflow:auto}
+.studio-shell .pane-resizer,.studio-shell .resource-resizer{touch-action:none}
+.studio-shell .resource-resizer{height:4px}
+@media(max-width:1100px){.studio-shell .dock-filename{max-width:160px}}
+@media(max-width:850px){.studio-shell .dock-filename{display:none}.studio-shell .dock-status{gap:8px}}

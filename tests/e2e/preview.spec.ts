@@ -300,8 +300,8 @@ test('editor stays editable during preview and update states preserve the last v
   async function editButtonText(value:string){await page.getByRole('button',{name:'图层'}).click();await page.locator('.object-tree-row').filter({hasText:/读取温度|排队中的修改|无效候选|热更新完成/}).click();await expect(page.locator('.inspector-object')).toContainText(value==='排队中的修改'||value==='无效候选'||value==='热更新完成'?'读取温度':'读取温度');const field=page.locator('.inspector .translatable-field input').first();await expect(field).toBeEnabled();await field.fill(value);await field.press('Tab')}
   async function waitForCandidate(text:string){await expect.poll(()=>state.calls.some(call=>call.command==='apply_preview_update'&&call.args.project.pages.flatMap((item:any)=>item.widgets).find((widget:any)=>widget.id==='read_button')?.props?.text===text)).toBe(true)}
   state.updateStatusByText['排队中的修改']='waiting';state.updateStatusByText['无效候选']='invalid'
-  await editButtonText('排队中的修改');await waitForCandidate('排队中的修改');await expect(page.locator('.workspace-hint')).toContainText('等待更新');await expect(popup.getByRole('button',{name:'读取温度',exact:true})).toBeVisible()
-  await editButtonText('无效候选');await waitForCandidate('无效候选');await expect(page.locator('.workspace-hint')).toContainText('校验失败');await expect(popup.getByRole('button',{name:'读取温度',exact:true})).toBeVisible()
+  await editButtonText('排队中的修改');await waitForCandidate('排队中的修改');await expect(page.locator('.preview-status')).toContainText('等待更新');await expect(popup.getByRole('button',{name:'读取温度',exact:true})).toBeVisible()
+  await editButtonText('无效候选');await waitForCandidate('无效候选');await expect(page.locator('.preview-status')).toContainText('校验失败');await expect(page.locator('.resources-panel')).toHaveClass(/collapsed/);await expect(popup.getByRole('button',{name:'读取温度',exact:true})).toBeVisible()
   await editButtonText('热更新完成');await waitForCandidate('热更新完成');await expect.poll(()=>state.updateLog.some(item=>item.text==='热更新完成'&&item.status==='applied'&&item.runtimeText==='热更新完成')).toBe(true);await expect.poll(()=>state.runtimeProject.pages.flatMap((item:any)=>item.widgets).find((widget:any)=>widget.id==='read_button')?.props?.text).toBe('热更新完成');await expect(popup.getByRole('button',{name:'热更新完成',exact:true})).toBeVisible()
   const popupClosed=popup.waitForEvent('close');await popup.getByRole('button',{name:'停止预览',exact:true}).click();await popupClosed
 })
@@ -321,6 +321,7 @@ test('validation and preview-window creation failures leave the editor as the on
   await previewOpenButton(page).click()
   await expect(page.locator('.studio-shell')).toBeVisible()
   await expect.poll(() => state.calls.filter(call => call.command === 'open_preview_window').length).toBe(0)
+  await expect(page.locator('.issues-content')).toBeVisible()
   expect(context.pages()).toHaveLength(1)
 
   state.invalid = false
